@@ -96,6 +96,7 @@ local SETTING_KEYS = {
     "alpha", "alpha_min", "alpha_max", "alpha_levels", "alpha_random",
     "tip", "save_folder",
     "font", "font_size",
+    "menu_lang",
 }
 
 local TOOL_NAMES = {
@@ -114,8 +115,8 @@ local TOOL_NAMES = {
 -- 的 layers={} 初始化数组长度(本常量未直接用到此处,但下游可读为单一真理源)。
 local LAYER_COUNT = 3
 
--- 插件版本与作者(关于弹窗)
-local PLUGIN_VERSION = "v62e"
+-- 插件版本与作者(关于弹窗,2026-09-03 v59e)
+local PLUGIN_VERSION = "v62h"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);

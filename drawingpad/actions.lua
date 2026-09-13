@@ -9,6 +9,7 @@ local InputDialog = require("ui/widget/inputdialog")
 local logger = require("logger")
 local components = require("drawingpad.components")
 local const = require("drawingpad.const")
+local L = require("drawingpad.i18n")
 local _ = require("gettext")
 
 local M = {}
@@ -169,9 +170,9 @@ function M:_clearAll()
         return
     end
     UIManager:show(ConfirmBox:new{
-        text = _("确定清空当前图层?此操作不可撤销。"),
-        ok_text = _("清空"),
-        cancel_text = _("取消"),
+        text = L.x(_("确定清空当前图层?此操作不可撤销。")),
+        ok_text = L.x(_("清空")),
+        cancel_text = L.x(_("取消")),
         ok_callback = function()
             -- 只清当前层:原位重置该层的 元素/撤销/重做,保持引用关系
             self.layers[self.active_layer] = {}
@@ -210,12 +211,12 @@ function M:_save()
     local function folderLabel()
         local f = self.save_folder
         if f == "" then
-            return "文件夹: 根目录"
+            return L.t("文件夹: 根目录", "Folder: root")
         end
         if #f > 26 then
             f = "…" .. f:sub(-24) -- 长绝对路径截断显示(按钮空间有限)
         end
-        return "文件夹: " .. f
+        return L.t("文件夹: ", "Folder: ") .. f
     end
     local function updateFolderLabel()
         local btn = dlg.button_table and dlg.button_table.button_by_id
@@ -226,9 +227,9 @@ function M:_save()
         end
     end
     dlg = InputDialog:new{
-        title = _("保存 PNG"),
+        title = L.x("保存 PNG"),
         input = os.date("drawing_%Y%m%d_%H%M%S"),
-        input_hint = _("文件名(自动补 .png)"),
+        input_hint = L.x(_("文件名(自动补 .png)")),
         buttons = {
             {
                 { id = "folder_btn", text = folderLabel(),
@@ -237,9 +238,9 @@ function M:_save()
                   end) end },
             },
             {
-                { text = _("取消"), id = "close",
+                { text = L.x(_("取消")), id = "close",
                   callback = function() UIManager:close(dlg) end },
-                { text = _("保存"), is_enter_default = true,
+                { text = L.x(_("保存")), is_enter_default = true,
                   callback = function()
                       local name = dlg:getInputText()
                       UIManager:close(dlg)
@@ -285,7 +286,7 @@ function M:_doSaveFlow(filename)
         local ok, saved_path = pcall(self._doSave, self, path)
         if ok and saved_path then
             self:_log("saved", saved_path)
-            components.showToast(_("已保存:") .. "\n" .. saved_path, 4)
+            components.showToast(L.x(_("已保存:")) .. "\n" .. saved_path, 4)
             return
         end
         self:_log("save failed, retrying", path, ok and "" or tostring(saved_path))
@@ -295,10 +296,10 @@ function M:_doSaveFlow(filename)
             local ok2, saved2 = pcall(self._doSave, self, retry_path)
             if ok2 and saved2 then
                 self:_log("saved (retry)", saved2)
-                components.showToast(_("已保存:") .. "\n" .. saved2, 4)
+                components.showToast(L.x(_("已保存:")) .. "\n" .. saved2, 4)
             else
                 self:_log("save retry failed", retry_path, ok2 and "" or tostring(saved2))
-                components.showToast(_("保存失败,请检查目录权限:") .. "\n" .. dir)
+                components.showToast(L.x(_("保存失败,请检查目录权限:")) .. "\n" .. dir)
             end
         end)
     end)
@@ -430,12 +431,12 @@ function M:_saveProject()
     local function folderLabel()
         local f = self.save_folder
         if f == "" then
-            return "文件夹: 根目录"
+            return L.t("文件夹: 根目录", "Folder: root")
         end
         if #f > 26 then
             f = "…" .. f:sub(-24)
         end
-        return "文件夹: " .. f
+        return L.t("文件夹: ", "Folder: ") .. f
     end
     local function updateFolderLabel()
         local btn = dlg.button_table and dlg.button_table.button_by_id
@@ -446,18 +447,18 @@ function M:_saveProject()
         end
     end
     dlg = InputDialog:new{
-        title = _("保存工程(可再编辑)"),
+        title = L.x("保存工程(可再编辑)"),
         input = os.date("drawing_%Y%m%d_%H%M%S"),
-        input_hint = _("文件名(自动补 .drawing)"),
+        input_hint = L.x("文件名(自动补 .drawing)"),
         buttons = {
             {
                 { id = "folder_btn", text = folderLabel(),
                   callback = function() self:_pickSaveFolder(updateFolderLabel) end },
             },
             {
-                { text = _("取消"), id = "close",
+                { text = L.x(_("取消")), id = "close",
                   callback = function() UIManager:close(dlg) end },
-                { text = _("保存"), is_enter_default = true,
+                { text = L.x(_("保存")), is_enter_default = true,
                   callback = function()
                       local name = dlg:getInputText()
                       UIManager:close(dlg)
@@ -498,10 +499,10 @@ function M:_doSaveProjectFlow(filename)
         path = dir .. "/" .. stem .. "_" .. n .. ".drawing"
     end
     if self:_doSaveProject(path) then
-        components.showToast(_("已保存:") .. "\n" .. path, 4)
+        components.showToast(L.x(_("已保存:")) .. "\n" .. path, 4)
         self:_log("project saved", path)
     else
-        components.showToast(_("保存失败,请检查目录权限:") .. "\n" .. dir, 4)
+        components.showToast(L.x(_("保存失败,请检查目录权限:")) .. "\n" .. dir, 4)
     end
 end
 
@@ -511,7 +512,7 @@ function M:_openProject()
         local dir = (self.save_folder ~= "") and self.save_folder
             or (DataStorage:getDataDir() .. "/drawingboard")
         self:_loadProject(dir .. "/" .. name .. ".drawing")
-    end, "%.drawing$", _("打开工程: "))
+    end, "%.drawing$", L.x("打开工程: "))
 end
 
 -- 载入 .drawing:原位清空三层 元素/撤销/重做 再插入(保持与 layers_* 的引用绑定,
@@ -519,18 +520,18 @@ end
 function M:_loadProject(path)
     local lfs = require("libs/libkoreader-lfs")
     if lfs.attributes(path, "mode") ~= "file" then
-        components.showToast(_("文件不存在:") .. "\n" .. path, 3)
+        components.showToast(L.x(_("文件不存在:")) .. "\n" .. path, 3)
         return
     end
     local chunk_ok, chunk = pcall(loadfile, path)
     if not chunk_ok or type(chunk) ~= "function" then
-        components.showToast(_("工程文件损坏:") .. "\n" .. path, 3)
+        components.showToast(L.x(_("工程文件损坏:")) .. "\n" .. path, 3)
         self:_log("load project: loadfile failed", path, tostring(chunk))
         return
     end
     local ok, data = pcall(chunk)
     if not ok or type(data) ~= "table" or type(data.layers) ~= "table" then
-        components.showToast(_("工程文件损坏:") .. "\n" .. path, 3)
+        components.showToast(L.x(_("工程文件损坏:")) .. "\n" .. path, 3)
         self:_log("load project: bad data", path)
         return
     end
@@ -586,7 +587,7 @@ function M:_loadProject(path)
     self._canvas_mask = self:_visibleMask()
     self:_renderAll()
     UIManager:setDirty(self, "full")
-    components.showToast(_("已打开:") .. "\n" .. path, 3)
+    components.showToast(L.x(_("已打开:")) .. "\n" .. path, 3)
     self:_log("project loaded", path)
 end
 
@@ -672,9 +673,9 @@ function M:_onClose()
     end
     if has_content then
         UIManager:show(ConfirmBox:new{
-            text = _("画板有未保存内容,确定关闭?"),
-            ok_text = _("关闭"),
-            cancel_text = _("取消"),
+            text = L.x(_("画板有未保存内容,确定关闭?")),
+            ok_text = L.x(_("关闭")),
+            cancel_text = L.x(_("取消")),
             ok_callback = doClose,
         })
     else

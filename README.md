@@ -6,26 +6,22 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 针对墨水屏做了专门的刷新优化:局部刷新、区域合并与节流,避免整屏闪烁和残影;对真机上 KOReader 的启动脚本重启循环、帧缓冲争用等环境问题做了兼容处理。
 
-![截图占位](docs/screenshot.png)
+## 界面与作品
+
+![绘图板界面](docs/screenshot.png)
+
+用绘图板绘制的灰度作品:
+
+![灰度作品示例](docs/artwork_hulk.png)
 
 ## 安装
 
-1. 克隆本仓库(或下载 zip 解压):
+- **方式一(推荐)**:到 [Releases](https://github.com/eznas/drawingboard.koplugin/releases) 下载最新 zip,解压后把 `drawingboard.koplugin/` 整个文件夹放入设备的 KOReader 插件目录(Kindle 为 `koreader/plugins/`),重启 KOReader 即可。
+- **方式二**:克隆本仓库(测试目录 `test/` 对插件运行无影响,可自行删除):
 
-   ```sh
-   git clone https://github.com/eznas/drawingboard.koplugin.git
-   ```
-
-2. 把 `drawingboard.koplugin/` 整个目录复制到设备的 KOReader 插件目录,例如 Kindle 上是 `koreader/plugins/`:
-
-   ```
-   koreader/plugins/drawingboard.koplugin/
-   ├── _meta.lua
-   ├── main.lua
-   └── drawingpad/
-   ```
-
-3. 重启 KOReader,在菜单中即可看到"绘图板"。
+  ```sh
+  git clone https://github.com/eznas/drawingboard.koplugin.git
+  ```
 
 ## 功能
 

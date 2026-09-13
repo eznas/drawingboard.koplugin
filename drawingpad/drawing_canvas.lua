@@ -39,6 +39,7 @@ local UIManager = require("ui/uimanager")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local logger = require("logger")
 local const = require("drawingpad.const")
+local L = require("drawingpad.i18n")
 
 local DrawingCanvas = InputContainer:extend{
     name = "DrawingCanvas",
@@ -125,6 +126,10 @@ function DrawingCanvas:init()
     self._drag_preview_repaint_fn = nil -- 预览跟随刷新节流定时任务闭包
 
     self:_loadSettings() -- 读取上次保存的工具设置(插件目录;无插件目录时跳过)
+
+    -- v62h:语言解析必须在任何 UI 构造前——menu_lang 设置优先,缺省按系统语言 auto
+    -- (系统语言非中文 → 英文菜单)。L 是 i18n 单例,resolve 一次全局生效
+    L.resolve(self.menu_lang)
 
     self:_log("init", Screen:getWidth(), "x", Screen:getHeight())
     -- 字体已从设置恢复则不覆盖(否则 _loadSettings 存的字体被默认字体顶掉);首次运行才取默认

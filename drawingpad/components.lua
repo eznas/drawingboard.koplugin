@@ -22,6 +22,7 @@ if not package.path:find(__self_dir, 1, true) then
     package.path = __self_dir .. "/?.lua;" .. __self_dir .. "/../?.lua;" .. package.path
 end
 local const = require("drawingpad.const")
+local L = require("drawingpad.i18n")
 
 local Blitbuffer = require("ffi/blitbuffer")
 local Device = require("device")
@@ -31,7 +32,8 @@ local GestureRange = require("ui/gesturerange")
 local Screen = Device.screen
 local UIManager = require("ui/uimanager")
 local ButtonTable = require("ui/widget/buttontable")
-local CenterContainer = require("ui/widget/container/centercontainer")
+local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local BottomContainer = require("ui/widget/container/bottomcontainer")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
@@ -121,8 +123,8 @@ end
 
 -- ============================ Dialog(圆角可拖动面板) ============================
 
--- 居中圆角白底可拖动面板弹窗(与插入文字弹窗 InputDialog 风格统一):
--- CenterContainer → MovableContainer → FrameContainer{radius, 白底} → content;
+-- 底部锚定圆角白底可拖动面板弹窗(初始靠近工具栏上方,可拖动):
+-- BottomContainer → MovableContainer → FrameContainer{radius, 白底} → content;
 -- 不设 covers_fullscreen:拖动时下层画布能重绘,MovableContainer 移动时
 -- setDirty("all") + 旧∪新区域 "ui" 刷新 → 拖动无残影。
 -- opts: { name, title, content, log };返回 popup。
@@ -133,7 +135,7 @@ function M.showCenteredDialog(opts)
     if opts.title then
         content = VerticalGroup:new{
             align = "center",
-            TextWidget:new{ text = opts.title, face = Font:getFace("infont", 20) },
+            TextWidget:new{ text = L.x(opts.title), face = Font:getFace("infont", 20) },
             VerticalSpan:new{ width = Size.span.vertical_default },
             content,
         }
@@ -148,10 +150,40 @@ function M.showCenteredDialog(opts)
         },
     }
     popup.movable = mc -- 与 InputDialog 的 self.movable 约定一致
-    popup[1] = CenterContainer:new{
-        dimen = popup.dimen,
-        mc,
-    }
+    -- 底部锚定(v62f):面板初始位置靠近底部工具栏上方(留 5px 空白),不遮挡画面中心;
+    -- 仍可拖动(MovableContainer)。bottom_clear = 需避让的底部高度(工具栏+状态栏),
+    -- 缺省按画板固定栏高 52+28 估算。
+    -- 水平锚定(v62g):opts.anchor_x = 一级图标/条目中心 x,面板中心尽量对齐它
+    -- (左右夹紧不出屏);缺省水平居中。构造后先预计算面板尺寸再定位。
+    local bottom_clear = opts.bottom_clear
+    if bottom_clear == nil then
+        bottom_clear = Screen:scaleBySize(52) + Screen:scaleBySize(28)
+    end
+    local margin = Screen:scaleBySize(5)
+    local ok_size, msize = pcall(function() return mc:getSize() end)
+    local pw = ok_size and msize and msize.w or 0
+    local ph = ok_size and msize and msize.h or 0
+    if pw > 0 and ph > 0 then
+        local px = opts.anchor_x
+            and math.floor(opts.anchor_x - pw / 2)
+            or math.floor((popup.dimen.w - pw) / 2)
+        px = math.max(margin, math.min(popup.dimen.w - pw - margin, px))
+        local py = popup.dimen.h - bottom_clear - margin - ph
+        popup[1] = WidgetContainer:new{
+            dimen = Geom:new{ x = px, y = py, w = pw, h = ph },
+            mc,
+        }
+    else
+        -- 尺寸预计算失败:退回底部居中(BottomContainer),至少保证完整可见
+        popup[1] = BottomContainer:new{
+            dimen = Geom:new{
+                x = 0, y = 0,
+                w = popup.dimen.w,
+                h = popup.dimen.h - bottom_clear - margin,
+            },
+            mc,
+        }
+    end
     -- 显式传刷新类型+区域:本树 UIManager._refresh 对 nil 模式直接丢弃(避免无谓全屏刷),
     -- 不传的话弹窗只进 framebuffer、硬件永不刷新 → "弹窗看不见,拖动后才出现"。
     -- "ui" = 非闪烁刷新;区域用 modal 全屏 dimen(与关闭时画布全屏重绘一致)。
@@ -186,7 +218,7 @@ end
 
 -- 统一 Toast(InfoMessage 包装)。timeout 缺省 = 常驻(点按关闭),传秒数则到时自动关
 function M.showToast(text, timeout)
-    local o = { text = text }
+    local o = { text = L.x(text) }
     if timeout then
         o.timeout = timeout
     end
@@ -420,7 +452,7 @@ function M.showValuePicker(opts)
     local close_bt = ButtonTable:new{
         width = pbar_w,
         buttons = {{
-            { text = _("关闭"), callback = function() UIManager:close(popup, "full") end },
+            { text = L.x(_("关闭")), callback = function() UIManager:close(popup, "full") end },
         }},
         show_parent = popup,
     }
@@ -452,6 +484,7 @@ function M.showValuePicker(opts)
     popup, mc = M.showCenteredDialog{
         name = "DrawingValuePicker",
         title = opts.title,
+        anchor_x = opts.anchor_x, -- 一级控件水平锚定透传
         content = VerticalGroup:new{
             align = "center",
             step_bt,

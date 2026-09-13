@@ -33,6 +33,7 @@ local InputDialog = require("ui/widget/inputdialog")
 local _ = require("gettext")
 local T = require("ffi/util").template
 local const = require("drawingpad.const")
+local L = require("drawingpad.i18n")
 
 local M = {}
 
@@ -100,7 +101,10 @@ function M:_buildToolbar()
     -- 均移除),激活指示只保留顶部横线断口
     local cells = {}
     for i, d in ipairs(const.TOOLBAR_ICONS) do
-        local btn = Button:new{
+        -- 坑:local btn = Button:new{ callback 引用 btn } 时,构造表在 local 生效前求值,
+        -- 闭包里的 btn 是全局(nil)——必须拆开声明
+        local btn
+        btn = Button:new{
             id = d.id,
             icon = d.icon,
             icon_rotation_angle = d.icon_rotation_angle or 0,
@@ -108,6 +112,8 @@ function M:_buildToolbar()
             icon_height = icon_px,
             bordersize = 0,
             callback = function()
+                -- v62g:一级图标中心 x(弹窗水平锚定)
+                self._anchor_x = self:_anchorX(btn)
                 if d.id == "cat_tool" then
                     self:_showCategoryMenu("tool")
                 elseif d.id == "cat_prop" then
@@ -124,6 +130,9 @@ function M:_buildToolbar()
             end,
         }
         cells[i] = self:_toolbarCell(btn, cell_w, row_h)
+        -- v62g:记录图标按钮(弹窗水平锚点用);点按时记下图标中心 x
+        self._toolbar_btns = self._toolbar_btns or {}
+        self._toolbar_btns[d.id] = btn
     end
     -- 顶部横线:当前打开面板的入口下方留断口(TouchMenu 同款激活指示)
     local line_h = math.max(1, Screen:scaleBySize(1))
@@ -164,6 +173,15 @@ function M:_buildToolbar()
     local ok, size = pcall(function() return self.toolbar:getSize() end)
     self.toolbar_h = (ok and size and size.h) or Screen:scaleBySize(52)
     self.status_h = Screen:scaleBySize(28)
+end
+
+-- 一级控件中心 x(弹窗水平锚点):按钮 paint 后才有 dimen;无信息返回 nil(弹窗自行居中)
+function M:_anchorX(btn)
+    local d = btn and btn.dimen
+    if d and d.x and d.w then
+        return d.x + d.w / 2
+    end
+    return nil
 end
 
 -- 底栏单格:图标按钮居中于等宽格(CenterContainer 固定尺寸格)
@@ -253,14 +271,14 @@ local TOGGLE_BUTTONS = {
     { id = "rect_btn",   cat = "tool",
       -- v59e:短按=切矩形工具,长按=切换 ☑填充
       text_fn = function(s)
-          return "矩形(" .. (s.rect_filled and "☑" or "☐") .. "填充)"
+          return L.t("矩形(", "Rect(") .. (s.rect_filled and "☑" or "☐") .. L.t("填充)", " fill)")
       end,
       active_fn = function(s) return s.tool == "rect" end,
       on_tap = toolSet("rect"),
       on_hold = function(s) s:_setTool("rect"); s:_toggleFilled("rect") end },
     { id = "circle_btn", cat = "tool",
       text_fn = function(s)
-          return "圆形(" .. (s.circle_filled and "☑" or "☐") .. "填充)"
+          return L.t("圆形(", "Ellipse(") .. (s.circle_filled and "☑" or "☐") .. L.t("填充)", " fill)")
       end,
       active_fn = function(s) return s.tool == "circle" end,
       on_tap = toolSet("circle"),
@@ -271,7 +289,7 @@ local TOGGLE_BUTTONS = {
     { id = "select_btn", cat = "tool",
       -- v59g:选择+复制合并(☑复制);短按=切选择工具,长按=切 ☑复制
       text_fn = function(s)
-          return "选择(" .. (s.select_mode == "copy" and "☑" or "☐") .. "复制)"
+          return L.t("选择(", "Select(") .. (s.select_mode == "copy" and "☑" or "☐") .. L.t("复制)", " copy)")
       end,
       active_fn = function(s) return s.tool == "select" end,
       on_tap = toolSet("select"),
@@ -279,7 +297,7 @@ local TOGGLE_BUTTONS = {
     { id = "fill_btn",   cat = "tool",
       -- v59g:点填充+路径填充合并(☑路径);短按=切填充工具(点填),长按=切 ☑路径(描边填)
       text_fn = function(s)
-          return "填充(" .. (s.fill_mode == "path" and "☑" or "☐") .. "路径)"
+          return L.t("填充(", "Fill(") .. (s.fill_mode == "path" and "☑" or "☐") .. L.t("路径)", " path)")
       end,
       active_fn = function(s) return s.tool == "fill" end,
       on_tap = toolSet("fill"),
@@ -287,7 +305,7 @@ local TOGGLE_BUTTONS = {
     { id = "eraser_btn", cat = "tool",
       -- v59f:重命名 擦除(☑框选);短按=切橡皮工具,长按=切换 画笔删/框选删
       text_fn = function(s)
-          return "擦除(" .. (s.eraser_mode == "rect" and "☑框选" or "☐框选") .. ")"
+          return L.t("擦除(", "Erase(") .. (s.eraser_mode == "rect" and L.t("☑框选", "☑box") or L.t("☐框选", "☐box")) .. ")"
       end,
       active_fn = function(s) return s.tool == "eraser" end,
       on_tap = toolSet("eraser"),
@@ -296,7 +314,7 @@ local TOGGLE_BUTTONS = {
     { id = "gray_btn",  cat = "prop",
       -- v59e:短按=弹灰度设置,长按=切换 ☑随机
       text_fn = function(s)
-          return "灰度(" .. (s.gray_random and "☑" or "☐") .. "随机)"
+          return L.t("灰度(", "Gray(") .. (s.gray_random and "☑" or "☐") .. L.t("随机)", " random)")
       end,
       on_tap = function(s)
           -- 有选中对象时保持选中走元素级灰度(_pickGray 内部分派);
@@ -306,7 +324,7 @@ local TOGGLE_BUTTONS = {
       on_hold = function(s) s:_toggleGrayRandom() end },
     { id = "width_btn", cat = "prop",
       text_fn = function(s)
-          return "粗细(" .. (s.width_random and "☑" or "☐") .. "随机)"
+          return L.t("粗细(", "Width(") .. (s.width_random and "☑" or "☐") .. L.t("随机)", " random)")
       end,
       on_tap = function(s)
           -- 同灰度:选中对象时保持选中(文字/填充提示无线宽,其余对象元素级调节);
@@ -314,24 +332,25 @@ local TOGGLE_BUTTONS = {
           s:_pickWidth()
       end,
       on_hold = function(s) s:_toggleWidthRandom() end },
-    { id = "tip_btn",   cat = "prop", label = "笔触",
-      on_tap = function(s) s:_showTipMenu() end },
     { id = "alpha_btn", cat = "prop",
-      -- v62:短按=弹透明度设置,长按=切换 ☑随机(与灰度/粗细同套路,和笔触并排)
+      -- v62:短按=弹透明度设置,长按=切换 ☑随机(与灰度/粗细同套路);v62h:与笔触对调,排在粗细后
       text_fn = function(s)
-          return "透明度(" .. (s.alpha_random and "☑" or "☐") .. "随机)"
+          return L.t("透明度(" .. (s.alpha_random and "☑" or "☐") .. "随机)",
+              "Opacity(" .. (s.alpha_random and "☑" or "☐") .. " random)")
       end,
       on_tap = function(s)
           -- 同灰度:选中对象时保持选中走元素级调节;无选中弹全局设置,不切当前工具
           s:_pickAlpha()
       end,
       on_hold = function(s) s:_toggleAlphaRandom() end },
+    { id = "tip_btn",   cat = "prop", label = "笔触",
+      on_tap = function(s) s:_showTipMenu() end },
     -- 图层类(v59f:每层单条目 —— ●当前层 + ☐/☑隐藏;单击=切层选中,长按=切隐藏)
     { id = "layer3_btn", cat = "layer", close_on_tap = false,
       text_fn = function(s)
           local mark = (s.active_layer == 3 and "●" or "○")
           local vis = (s.layer_visible[3] and "☐" or "☑")
-          return mark .. "上图层(" .. vis .. "隐藏)"
+          return mark .. L.t("上图层(", "Top(") .. vis .. L.t("隐藏)", "hide)")
       end,
       active_fn = function(s) return s.active_layer == 3 end,
       on_tap = function(s) s:_switchLayer(3) end,
@@ -340,7 +359,7 @@ local TOGGLE_BUTTONS = {
       text_fn = function(s)
           local mark = (s.active_layer == 2 and "●" or "○")
           local vis = (s.layer_visible[2] and "☐" or "☑")
-          return mark .. "中图层(" .. vis .. "隐藏)"
+          return mark .. L.t("中图层(", "Mid(") .. vis .. L.t("隐藏)", "hide)")
       end,
       active_fn = function(s) return s.active_layer == 2 end,
       on_tap = function(s) s:_switchLayer(2) end,
@@ -349,7 +368,7 @@ local TOGGLE_BUTTONS = {
       text_fn = function(s)
           local mark = (s.active_layer == 1 and "●" or "○")
           local vis = (s.layer_visible[1] and "☐" or "☑")
-          return mark .. "下图层(" .. vis .. "隐藏)"
+          return mark .. L.t("下图层(", "Bottom(") .. vis .. L.t("隐藏)", "hide)")
       end,
       active_fn = function(s) return s.active_layer == 1 end,
       on_tap = function(s) s:_switchLayer(1) end,
@@ -358,7 +377,7 @@ local TOGGLE_BUTTONS = {
       -- v62:当前层整体透明度(草稿层整体调淡);文本带当前值
       text_fn = function(s)
           local v = (s.layer_alpha and s.layer_alpha[s.active_layer]) or 1
-          return "当前层透明度 " .. math.floor(v * 100 + 0.5) .. "%"
+          return L.t("当前层透明度 ", "Layer opacity ") .. math.floor(v * 100 + 0.5) .. "%"
       end,
       on_tap = function(s) s:_pickLayerAlpha() end },
     -- 功能类(点选后面板保持打开,撤销/重做/清空可连点;退出/关于 v59d 并入)
@@ -394,7 +413,8 @@ M._toggle_buttons = TOGGLE_BUTTONS
 function M:_toggleDef(t)
     local def = {
         id = t.id,
-        text = t.text_fn and t.text_fn(self) or t.label,
+        -- v62h:英文菜单(L.x 查字典;text_fn 复合串内部已用 L.t)
+        text = L.x(t.text_fn and t.text_fn(self) or t.label),
         callback = function()
             t.on_tap(self)
         end,
@@ -474,6 +494,8 @@ function M:_showCategoryMenu(cat)
                     close = (t.cat ~= "func" and t.cat ~= "layer")
                 end
                 b.callback = function()
+                    -- v62g:面板条目也是一级控件,点按记下其中心 x(二级弹窗锚定)
+                    self._anchor_x = self:_anchorX(b) or self._anchor_x
                     orig()
                     if close and popup then
                         UIManager:close(popup, "full")
@@ -492,7 +514,8 @@ function M:_showCategoryMenu(cat)
     self:_refreshToolbar()
     popup = components.showCenteredDialog{
         name = "DrawingCategoryMenu",
-        title = CATEGORY_TITLES[cat] or cat,
+        title = L.x(CATEGORY_TITLES[cat] or cat),
+        anchor_x = self._anchor_x,
         content = bt,
         log = function(...) self:_log(...) end,
     }
@@ -576,48 +599,48 @@ function M:_statusText()
     local t = self.tool
     local gray_txt
     if self.gray_random then
-        gray_txt = string.format("灰:随机(%d-%d,%d级)",
+        gray_txt = string.format(L.t("灰:随机(%d-%d,%d级)", "G:rand(%d-%d,%d)"),
             math.floor(self.gray_min * 100 + 0.5), math.floor(self.gray_max * 100 + 0.5), self.gray_levels)
     else
-        gray_txt = string.format("灰:%d%%", math.floor(self.gray * 100 + 0.5))
+        gray_txt = string.format(L.t("灰:%d%%", "G:%d%%"), math.floor(self.gray * 100 + 0.5))
     end
     local width_txt
     if self.width_random then
-        width_txt = string.format("粗:随机(%d-%d,%d级)", self.width_min, self.width_max, self.width_levels)
+        width_txt = string.format(L.t("粗:随机(%d-%d,%d级)", "W:rand(%d-%d,%d)"), self.width_min, self.width_max, self.width_levels)
     else
-        width_txt = string.format("粗:%d", self.width)
+        width_txt = string.format(L.t("粗:%d", "W:%d"), self.width)
     end
-    local layer_txt = const.LAYER_NAMES[self.active_layer]
-        .. (self.layer_visible[self.active_layer] and "" or "(隐)")
+    local layer_txt = L.x(const.LAYER_NAMES[self.active_layer])
+        .. (self.layer_visible[self.active_layer] and "" or L.t("(隐)", "(hide)"))
     -- 透明度(下次落笔):随机或非全不透明时才显示,省状态栏宽度
     if self.alpha_random then
-        layer_txt = layer_txt .. string.format(" 透:随机(%d-%d)",
+        layer_txt = layer_txt .. string.format(L.t(" 透:随机(%d-%d)", " O:rand(%d-%d)"),
             math.floor((self.alpha_min or 0.3) * 100 + 0.5), math.floor((self.alpha_max or 1) * 100 + 0.5))
     elseif (self.alpha or 1) < 0.999 then
-        layer_txt = layer_txt .. string.format(" 透:%d%%", math.floor(self.alpha * 100 + 0.5))
+        layer_txt = layer_txt .. string.format(L.t(" 透:%d%%", " O:%d%%"), math.floor(self.alpha * 100 + 0.5))
     end
     local base
     if t == "text" then
         -- 文字:灰度值/字号/字体名/图层
         local fname = (self.font or "?"):gsub("%.[^.]+$", "")
-        base = string.format("%s %s 字号:%d %s %s", const.TOOL_NAMES[t], gray_txt, self.font_size, fname, layer_txt)
+        base = string.format("%s %s %s:%d %s %s", L.x(const.TOOL_NAMES[t]), gray_txt, L.t("字号", "size"), self.font_size, fname, layer_txt)
     elseif t == "eraser" then
-        local mode = (self.eraser_mode == "rect") and "框选删" or "画笔删"
-        base = string.format("%s(%s) %s %s", const.TOOL_NAMES[t], mode, width_txt, layer_txt)
+        local mode = (self.eraser_mode == "rect") and L.t("框选删", "box") or L.t("画笔删", "tap")
+        base = string.format("%s(%s) %s %s", L.x(const.TOOL_NAMES[t]), mode, width_txt, layer_txt)
     elseif t == "fill" then
-        local mode = (self.fill_mode == "path") and "描边填" or "点填"
-        base = string.format("%s(%s) %s %s", const.TOOL_NAMES[t], mode, gray_txt, layer_txt)
+        local mode = (self.fill_mode == "path") and L.t("描边填", "path") or L.t("点填", "tap")
+        base = string.format("%s(%s) %s %s", L.x(const.TOOL_NAMES[t]), mode, gray_txt, layer_txt)
     elseif t == "select" then
-        local mode = (self.select_mode == "copy") and "复制" or "移动"
-        base = string.format("选择(%s) %s", mode, layer_txt)
+        local mode = (self.select_mode == "copy") and L.t("复制", "copy") or L.t("移动", "move")
+        base = string.format(L.t("选择(%s)", "Select(%s)") .. " %s", mode, layer_txt)
     elseif t == "rect" or t == "circle" then
         local filled = ((t == "rect" and self.rect_filled) or (t == "circle" and self.circle_filled))
-            and "实心" or "空心"
-        base = string.format("%s(%s) %s %s %s", const.TOOL_NAMES[t], filled, gray_txt, width_txt, layer_txt)
+            and L.t("实心", "fill") or L.t("空心", "line")
+        base = string.format("%s(%s) %s %s %s", L.x(const.TOOL_NAMES[t]), filled, gray_txt, width_txt, layer_txt)
     else
         -- 画笔/直线显示笔触形状(下次落笔状态的一部分)
-        local tip_txt = (t == "brush" or t == "line") and (" 尖:" .. (const.TIP_NAMES[self.tip] or "圆")) or ""
-        base = string.format("%s %s %s%s %s", const.TOOL_NAMES[t] or t, gray_txt, width_txt, tip_txt, layer_txt)
+        local tip_txt = (t == "brush" or t == "line") and (" " .. L.t("尖:", "tip:") .. (L.x(const.TIP_NAMES[self.tip]) or L.x("圆"))) or ""
+        base = string.format("%s %s %s%s %s", L.x(const.TOOL_NAMES[t]) or t, gray_txt, width_txt, tip_txt, layer_txt)
     end
     return base
 end
@@ -633,8 +656,18 @@ end
 -- KOReader 的 Menu 条目左对齐无法居中,这里用 ButtonTable(按钮文字天然居中)
 -- 包在全屏模态容器里,点空白处关闭。返回 bt(可 button_by_id 改标签)、popup
 function M:_showCenteredButtons(title, buttons, width_factor)
-    -- 统一走 components.showCenteredDialog(圆角可拖动面板 + 点空白关闭);
+    -- 统一走 components.showCenteredDialog(底部锚定圆角可拖动面板 + 点空白关闭);
     -- 返回 bt(可 button_by_id 改标签)、popup
+    -- v62h:条目文字经英文菜单字典(L.x;title 由 showCenteredDialog 统一翻)
+    if L.lang == "en" and buttons then
+        for _, row in ipairs(buttons) do
+            for _, bdef in ipairs(row) do
+                if type(bdef.text) == "string" then
+                    bdef.text = L.x(bdef.text)
+                end
+            end
+        end
+    end
     local bt = ButtonTable:new{
         width = math.floor(Screen:getWidth() * (width_factor or const.UI_WIDTH_MEDIUM)),
         buttons = buttons,
@@ -642,6 +675,7 @@ function M:_showCenteredButtons(title, buttons, width_factor)
     local popup = components.showCenteredDialog{
         name = "DrawingCenterMenu",
         title = title,
+        anchor_x = self._anchor_x,
         content = bt,
         log = function(...) self:_log(...) end,
     }
@@ -713,7 +747,7 @@ function M._showTipMenu_core(self)
             img_widget = ImageWidget:new{ image = pv, width = icon_px, height = icon_px }
         end)
         local btn = Button:new{
-            text = tip_label,
+            text = L.x(tip_label),
             width = btn_w,
             bordersize = 0,
             align = "left",
@@ -751,7 +785,7 @@ function M._showTipMenu_core(self)
     -- 关闭行(无边框、宽度自适应,整体在面板内居中;文案与其它弹窗统一为"关闭")
     rows[#rows + 1] = separator()
     rows[#rows + 1] = Button:new{
-        text = _("关闭"),
+        text = L.x(_("关闭")),
         bordersize = 0,
         callback = function()
             closePopup()
@@ -759,6 +793,7 @@ function M._showTipMenu_core(self)
     }
     popup = components.showCenteredDialog{
         name = "DrawingTipMenu",
+        anchor_x = self._anchor_x,
         content = VerticalGroup:new{ align = "center", unpack(rows) },
         log = function(...)
             local parts = {}
@@ -817,7 +852,7 @@ function M:_showTextDialog(x, y, el)
     end
     -- 字体/字号按钮:选中后实时更新弹窗内按钮标签
     local function fontLabel()
-        return "字体: " .. ((self.font or "?"):gsub("%.[^.]+$", ""))
+        return L.t("字体: ", "Font: ") .. ((self.font or "?"):gsub("%.[^.]+$", ""))
     end
     local function updateFontLabel()
         local btn = dlg.button_table and dlg.button_table.button_by_id
@@ -831,33 +866,33 @@ function M:_showTextDialog(x, y, el)
         local btn = dlg.button_table and dlg.button_table.button_by_id
             and dlg.button_table.button_by_id["size_btn"]
         if btn and btn.setText then
-            btn:setText("字号: " .. self.font_size, btn.width)
+            btn:setText(L.t("字号: ", "Size: ") .. self.font_size, btn.width)
             UIManager:setDirty(dlg, "partial")
         end
     end
     dlg = InputDialog:new{
-        title = is_edit and _("修改文字") or _("插入文字"),
+        title = L.x(is_edit and "修改文字" or "插入文字"),
         input = (is_edit and el.text) or (self._last_text or ""),
-        input_hint = is_edit and _("修改文字内容(字体/字号用下方按钮)")
-            or _("输入要插入的文字(灰度用工具栏调整)"),
+        input_hint = is_edit and L.t("修改文字内容(字体/字号用下方按钮)", "Edit text (font/size via buttons below)")
+            or L.t("输入要插入的文字(灰度用工具栏调整)", "Enter text to insert"),
         buttons = {
             {
                 -- 字体/字号整合进文字弹窗
                 { id = "font_btn", text = fontLabel(),
                   callback = function() self_widget:_pickFont(updateFontLabel) end },
-                { id = "size_btn", text = "字号: " .. self.font_size,
+                { id = "size_btn", text = L.t("字号: ", "Size: ") .. self.font_size,
                   callback = function() self_widget:_pickFontSize(updateSizeLabel) end },
             },
             {
                 {
-                    text = _("取消"),
+                    text = L.x(_("取消")),
                     id = "close",
                     callback = function()
                         UIManager:close(dlg)
                     end,
                 },
                 {
-                    text = is_edit and _("更新") or _("插入"),
+                    text = L.x(is_edit and "更新" or "插入"),
                     is_enter_default = true,
                     callback = function()
                         local text = dlg:getInputText()
@@ -1094,6 +1129,7 @@ end
 function M:_showValuePicker(opts)
     opts = opts or {}
     opts.log = function(...) self:_log(...) end
+    opts.anchor_x = opts.anchor_x or self._anchor_x -- 二级弹窗锚定一级条目
     return components.showValuePicker(opts)
 end
 
@@ -1105,10 +1141,10 @@ function M:_showSettingDialog(o)
     local popup
     local function labels()
         local l = {
-            string.format("%s:%s", o.labels.max, o.disp(o.get.max(self))),
-            string.format("%s:%s", o.labels.min, o.disp(o.get.min(self))),
-            string.format("分级:%d", o.get.levels(self)),
-            string.format("固定:%s", o.disp(o.get.fixed(self))),
+            string.format("%s:%s", L.x(o.labels.max), o.disp(o.get.max(self))),
+            string.format("%s:%s", L.x(o.labels.min), o.disp(o.get.min(self))),
+            string.format(L.t("分级:%d", "Levels:%d"), o.get.levels(self)),
+            string.format(L.t("固定:%s", "Fixed:%s"), o.disp(o.get.fixed(self))),
         }
         return l
     end
@@ -1147,31 +1183,31 @@ function M:_showSettingDialog(o)
     end
     local btns = {
         {
-            { id = o.ids[1], text = o.labels.max,
+            { id = o.ids[1], text = L.x(o.labels.max),
               callback = function()
                   local s = o.spin.max
                   spin({ s[1], s[2], s[3], spinval("max") }, function(v) o.set.max(self, v) end)
               end },
-            { id = o.ids[2], text = o.labels.min,
+            { id = o.ids[2], text = L.x(o.labels.min),
               callback = function()
                   local s = o.spin.min
                   spin({ s[1], s[2], s[3], spinval("min") }, function(v) o.set.min(self, v) end)
               end },
         },
         {
-            { id = o.ids[3], text = "分级",
+            { id = o.ids[3], text = L.x("分级"),
               callback = function()
                   local s = o.spin.levels
                   spin({ s[1], s[2], s[3], spinval("levels") }, function(v) o.set.levels(self, v) end)
               end },
-            { id = o.ids[4], text = "固定",
+            { id = o.ids[4], text = L.x("固定"),
               callback = function()
                   local s = o.spin.fixed
                   spin({ s[1], s[2], s[3], spinval("fixed") }, function(v) o.set.fixed(self, v) end)
               end },
         },
         {
-            { text = _("关闭"), callback = function() if popup then UIManager:close(popup, "full") end end },
+            { text = L.x(_("关闭")), callback = function() if popup then UIManager:close(popup, "full") end end },
         },
     }
     bt, popup = self:_showCenteredButtons(o.title, btns, const.UI_WIDTH_MEDIUM)
@@ -1424,7 +1460,7 @@ function M:_pickFont(on_change)
         return
     end
     menu = Menu:new{
-        title = T(_("选择字体(共 %1 个)"), #items),
+        title = T(L.t("选择字体(共 %1 个)", "Choose font (%1 total)"), #items),
         item_table = items,
         width = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * const.UI_WIDTH_WIDE),
         height = math.floor(Screen:getHeight() * 0.9),
@@ -1470,7 +1506,7 @@ end
 -- title_prefix(可选)=弹窗标题前缀(默认"选择保存文件夹: ")
 function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
     file_ext = file_ext or "%.png$"
-    title_prefix = title_prefix or _("选择保存文件夹: ")
+    title_prefix = title_prefix or L.t("选择保存文件夹: ", "Choose save folder: ")
     local lfs = require("libs/libkoreader-lfs")
     local base = DataStorage:getDataDir() .. "/drawingboard"
     if lfs.attributes(base, "mode") ~= "directory" then
@@ -1490,7 +1526,7 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
         return head
     end
     local function titleOf(p)
-        return (p == base) and "根目录" or p
+        return (p == base) and L.t("根目录", "root folder") or p
     end
     local function commit(path)
         self.save_folder = (path == base) and "" or path
@@ -1523,7 +1559,7 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
         local parent = parentOf(cur)
         table.insert(rows, {
             {
-                text = "主目录",
+                text = L.x("主目录"),
                 callback = function()
                     if cur ~= base then
                         cur = base
@@ -1532,7 +1568,7 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
                 end,
             },
             {
-                text = "上一级",
+                text = L.x("上一级"),
                 enabled = parent ~= nil,
                 callback = function()
                     if parent then
@@ -1542,11 +1578,11 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
                 end,
             },
             {
-                text = "选择此目录",
+                text = L.x("选择此目录"),
                 callback = function() commit(cur) end,
             },
             {
-                text = "关闭",
+                text = L.x("关闭"),
                 callback = function()
                     if dialog then
                         UIManager:close(dialog)
@@ -1612,8 +1648,31 @@ function M:_showAbout()
     local close_bt = ButtonTable:new{
         width = math.floor(Screen:getWidth() * const.UI_WIDTH_NARROW),
         buttons = {
-            { { text = _("关闭"),
+            { { text = L.x(_("关闭")),
                 callback = function()
+                    if self._about_popup then
+                        UIManager:close(self._about_popup, "full")
+                        self._about_popup = nil
+                    end
+                end } },
+        },
+    }
+    -- v62h:英文菜单选项(循环 自动→中文→English);auto 规则=系统语言非中文→英文
+    local lang_names = { auto = L.t("菜单语言:自动", "Language: auto"), zh = L.t("菜单语言:中文", "Language: 中文"), en = L.t("菜单语言:English", "Language: English") }
+    local lang_bt = ButtonTable:new{
+        width = math.floor(Screen:getWidth() * const.UI_WIDTH_NARROW),
+        buttons = {
+            { { text = lang_names[self.menu_lang or "auto"],
+                callback = function()
+                    local next_pref = { auto = "en", en = "zh", zh = "auto" }
+                    self.menu_lang = next_pref[self.menu_lang or "auto"]
+                    if self.menu_lang == "auto" then
+                        self.menu_lang = nil
+                    end
+                    L.resolve(self.menu_lang)
+                    self:_refreshToolbar()
+                    components.showToast(self.menu_lang == "en" and L.t("菜单语言已切换为英文,重开菜单生效", "Menu language: English")
+                        or L.t("菜单语言已切换为中文,重开菜单生效", "Menu language: Chinese"), 2)
                     if self._about_popup then
                         UIManager:close(self._about_popup, "full")
                         self._about_popup = nil
@@ -1623,17 +1682,19 @@ function M:_showAbout()
     }
     local content = VerticalGroup:new{
         align = "center",
-        line(_("绘图板 drawingboard")),
-        line(_("软件版本:") .. const.PLUGIN_VERSION),
-        line(_("作者:") .. const.PLUGIN_AUTHOR),
+        line(L.t("绘图板 drawingboard", "drawingboard")),
+        line(L.t("软件版本:", "Version:") .. const.PLUGIN_VERSION),
+        line(L.t("作者:", "Author:") .. const.PLUGIN_AUTHOR),
         line("GitHub: https://github.com/eznas"),
-        line(_("功能:自由画笔/图形/文字/填充/多图层")),
-        line(_("保存路径:koreader/drawingboard/")),
+        line(L.t("功能:自由画笔/图形/文字/填充/多图层", "Freehand/shapes/text/fill/layers")),
+        line(L.t("保存路径:koreader/drawingboard/", "Save to: koreader/drawingboard/")),
+        lang_bt,
         close_bt,
     }
     self._about_popup = components.showCenteredDialog{
         name = "DrawingAbout",
         title = _("关于"),
+        anchor_x = self._anchor_x,
         content = content,
         log = function(...) self:_log(...) end,
     }
