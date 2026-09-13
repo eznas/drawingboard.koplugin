@@ -1664,7 +1664,6 @@ function M:_showAbout()
         line(L.t("Version:", "软件版本:") .. const.PLUGIN_VERSION),
         line(L.t("Author:", "作者:") .. const.PLUGIN_AUTHOR),
         line("GitHub: https://github.com/eznas"),
-        line(L.t("Freehand/shapes/text/fill/layers", "功能:自由画笔/图形/文字/填充/多图层")),
         line(L.t("Save to: koreader/drawingboard/", "保存路径:koreader/drawingboard/")),
         lang_bt,
     }

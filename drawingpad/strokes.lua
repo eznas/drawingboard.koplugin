@@ -43,6 +43,7 @@ function M:_invalidateTasks()
     self._drag_preview_region = nil
     self._stroke_repaint_pending = false
     self._stroke_region = nil
+    self:_freeAlphaStrokeSnap() -- 半透明笔画被中止时释放快照(下次落笔会重取)
 end
 
 -- 增量样条渲染:消费 points 里尚未渲染的段(_seg 计数),画法与 shapes.polyline
@@ -64,6 +65,11 @@ function M:_renderStrokeTail(s)
     local pbb = self:_alphaBB(self.canvas_bb, s)
     if type(pbb) == "table" and pbb.__dp_alpha and pbb.__dp_alpha < 255 then
         pbb = self.canvas_bb
+        -- v62v:落笔前快照(只取一次)——收笔快路恢复快照+整笔单次合成
+        if not s._alpha_snap_done then
+            s._alpha_snap_done = true
+            self:_takeAlphaStrokeSnap()
+        end
     end
     local minx, miny, maxx, maxy
     if not s._tip_drawn then
@@ -195,6 +201,24 @@ function M:_strokeRegion(s)
     return self:_dirtyRegion(minx, miny, maxx, maxy, (s.width or 1) + 2)
 end
 
+-- 半透明笔画落笔前画布快照(v62v):收笔用"恢复快照 + 整笔单次合成"替代
+-- _redrawRegion 全元素重放——重放要把区域内所有元素(含整幅背景填)重画一遍,
+-- 元素一多收笔就明显卡;快照恢复后画布即落笔前状态,只需合成这一笔本身。
+-- 代价 = 每笔一次整幅拷贝(毫秒级),远小于大区域重放
+function M:_takeAlphaStrokeSnap()
+    self:_freeAlphaStrokeSnap()
+    local snap = Blitbuffer.new(self.canvas_w, self.canvas_h, self.canvas_bb:getType())
+    snap:blitFullFrom(self.canvas_bb)
+    self._alpha_stroke_snap = snap
+end
+
+function M:_freeAlphaStrokeSnap()
+    if self._alpha_stroke_snap then
+        self._alpha_stroke_snap:free()
+        self._alpha_stroke_snap = nil
+    end
+end
+
 function M:_flushStrokeRepaint()
     if self._stroke_repaint_fn then
         UIManager:unschedule(self._stroke_repaint_fn)
@@ -291,9 +315,36 @@ function M:_finishStroke(x, y)
             self._stroke_repaint_fn = nil
         end
         local sreg = self:_strokeRegion(s)
+        -- v62v 快路:恢复落笔前快照(一次 blit 擦掉不透明实时预览),再对整笔
+        -- 做一次单次合成(drawElement 拦截 → drawFilledAlpha)。旧路径走
+        -- _redrawRegion:白刷+重放区域内全部元素(含背景填),元素多时收笔明显卡。
+        -- 当前层之上还有可见图层时快路恢复不了遮挡关系,退回重放
+        local replay = true
+        local snap = self._alpha_stroke_snap
+        self._alpha_stroke_snap = nil
+        if snap then
+            local active = self.active_layer or 2
+            for li = active + 1, 3 do
+                if self.layer_visible[li] and #self.layers[li] > 0 then
+                    replay = false
+                    break
+                end
+            end
+        end
         if sreg then
-            self:_redrawRegion(sreg)
+            if replay then
+                self:_redrawRegion(sreg)
+            else
+                self.canvas_bb:blitFrom(snap, sreg.x, sreg.y, sreg.x, sreg.y, sreg.w, sreg.h)
+                shapes.drawElement(self:_alphaBB(self.canvas_bb, s), s, Blitbuffer.gray(s.gray))
+                if self._invalidateVisCache then
+                    self:_invalidateVisCache()
+                end
+            end
             UIManager:setDirty(self, "partial", sreg)
+        end
+        if snap then
+            snap:free()
         end
         return
     end

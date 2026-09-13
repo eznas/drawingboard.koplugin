@@ -136,7 +136,13 @@ local M = {
 }
 
 -- 成对直译(复合/动态串):源语言英文
+-- v62u:auto 模式(menu_lang 未手动选过)每次调用重新检测——KOReader 语言
+-- 可在会话中切换(gettext 即时生效),插件若只在 init 时解析一次会一直留在旧语言
+local detect_is_chinese -- 前置声明(定义在下方,M.t/M.x 运行时引用)
 function M.t(en, zh)
+    if M.pref == nil then
+        M.lang = detect_is_chinese() and "zh" or "en"
+    end
     if M.lang == "zh" then
         return zh ~= nil and zh or en
     end
@@ -145,6 +151,9 @@ end
 
 -- 查字典(单串)
 function M.x(en)
+    if M.pref == nil then
+        M.lang = detect_is_chinese() and "zh" or "en"
+    end
     if M.lang == "zh" then
         local zh = M.dict[en]
         if zh ~= nil then
@@ -159,7 +168,7 @@ end
 --   local is_chinese = current_lang:match("^zh") and true or false
 -- 差异:current_lang 为空/"C"(POSIX 未设置,常见于测试环境)时回退
 -- G_reader_settings 的 language(用户真实选择),仍非 zh 才用英文
-local function detect_is_chinese()
+function detect_is_chinese()
     local ok, current_lang = pcall(function()
         local gettext = require("gettext")
         return (gettext and gettext.current_lang) or ""
@@ -178,8 +187,9 @@ end
 
 M.lang = detect_is_chinese() and "zh" or "en"
 
--- 解析语言:pref = "en"/"zh"(关于弹窗手动切换)覆盖;nil = 重新自动检测
+-- 解析语言:pref = "en"/"zh"(关于弹窗手动切换)覆盖并锁定;nil = auto(每次取串时跟随系统语言)
 function M.resolve(pref)
+    M.pref = (pref == "en" or pref == "zh") and pref or nil
     if pref == "en" or pref == "zh" then
         M.lang = pref
         return M.lang

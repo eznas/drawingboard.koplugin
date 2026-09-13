@@ -116,8 +116,8 @@ local TOOL_NAMES = {
 -- 的 layers={} 初始化数组长度(本常量未直接用到此处,但下游可读为单一真理源)。
 local LAYER_COUNT = 3
 
--- 插件版本与作者(关于弹窗,2026-09-03 v59e)
-local PLUGIN_VERSION = "v62t"
+-- 插件版本与作者(关于弹窗;版本与 GitHub eznas/drawingboard.koplugin 保持一致或更高)
+local PLUGIN_VERSION = "v62u"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);
