@@ -1,0 +1,8 @@
+# 运行时生成的用户配置与日志
+drawingboard.log
+drawingpad_settings.lua
+drawingpad_settings.lua.old
+
+# 测试输出
+drawingpad/test/*.png
+*.out.png
