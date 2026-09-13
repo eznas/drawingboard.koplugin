@@ -782,15 +782,7 @@ function M._showTipMenu_core(self)
         end
         rows[#rows + 1] = row_content
     end
-    -- 关闭行(无边框、宽度自适应,整体在面板内居中;文案与其它弹窗统一为"关闭")
-    rows[#rows + 1] = separator()
-    rows[#rows + 1] = Button:new{
-        text = L.x(_("Close")),
-        bordersize = 0,
-        callback = function()
-            closePopup()
-        end,
-    }
+    -- v62t:关闭按钮已移除(点空白处即关闭,与其他弹窗一致)
     popup = components.showCenteredDialog{
         name = "DrawingTipMenu",
         anchor_x = self._anchor_x,
@@ -1143,8 +1135,8 @@ function M:_showSettingDialog(o)
         local l = {
             string.format("%s:%s", L.x(o.labels.max), o.disp(o.get.max(self))),
             string.format("%s:%s", L.x(o.labels.min), o.disp(o.get.min(self))),
-            string.format(L.t("分级:%d", "Levels:%d"), o.get.levels(self)),
-            string.format(L.t("固定:%s", "Fixed:%s"), o.disp(o.get.fixed(self))),
+            string.format(L.t("Levels:%d", "分级:%d"), o.get.levels(self)),
+            string.format(L.t("Fixed:%s", "固定:%s"), o.disp(o.get.fixed(self))),
         }
         return l
     end
@@ -1171,7 +1163,7 @@ function M:_showSettingDialog(o)
     end
     local function spin(spec, onchange)
         self:_showValuePicker{
-            title = spec[1],
+            title = L.x(spec[1]),
             value = spec[4],
             min = spec[2],
             max = spec[3],
@@ -1205,9 +1197,6 @@ function M:_showSettingDialog(o)
                   local s = o.spin.fixed
                   spin({ s[1], s[2], s[3], spinval("fixed") }, function(v) o.set.fixed(self, v) end)
               end },
-        },
-        {
-            { text = L.x(_("Close")), callback = function() if popup then UIManager:close(popup, "full") end end },
         },
     }
     bt, popup = self:_showCenteredButtons(o.title, btns, const.UI_WIDTH_MEDIUM)
@@ -1645,18 +1634,7 @@ function M:_showAbout()
     local function line(text)
         return TextWidget:new{ text = text, face = face }
     end
-    local close_bt = ButtonTable:new{
-        width = math.floor(Screen:getWidth() * const.UI_WIDTH_NARROW),
-        buttons = {
-            { { text = L.x(_("Close")),
-                callback = function()
-                    if self._about_popup then
-                        UIManager:close(self._about_popup, "full")
-                        self._about_popup = nil
-                    end
-                end } },
-        },
-    }
+    -- v62t:关闭按钮已移除(点空白处即关闭)
     -- v62h:英文菜单选项(循环 自动→中文→English);auto 规则=系统语言非中文→英文
     local lang_names = { auto = L.t("Language: auto", "菜单语言:自动"), zh = L.t("Language: 中文", "菜单语言:中文"), en = L.t("Language: English", "菜单语言:English") }
     local lang_bt = ButtonTable:new{
@@ -1689,7 +1667,6 @@ function M:_showAbout()
         line(L.t("Freehand/shapes/text/fill/layers", "功能:自由画笔/图形/文字/填充/多图层")),
         line(L.t("Save to: koreader/drawingboard/", "保存路径:koreader/drawingboard/")),
         lang_bt,
-        close_bt,
     }
     self._about_popup = components.showCenteredDialog{
         name = "DrawingAbout",

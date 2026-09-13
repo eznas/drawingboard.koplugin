@@ -211,12 +211,12 @@ function M:_save()
     local function folderLabel()
         local f = self.save_folder
         if f == "" then
-            return L.t("文件夹: 根目录", "Folder: root")
+            return L.t("Folder: root", "文件夹: 根目录")
         end
         if #f > 26 then
             f = "…" .. f:sub(-24) -- 长绝对路径截断显示(按钮空间有限)
         end
-        return L.t("文件夹: ", "Folder: ") .. f
+        return L.t("Folder: ", "文件夹: ") .. f
     end
     local function updateFolderLabel()
         local btn = dlg.button_table and dlg.button_table.button_by_id
@@ -431,12 +431,12 @@ function M:_saveProject()
     local function folderLabel()
         local f = self.save_folder
         if f == "" then
-            return L.t("文件夹: 根目录", "Folder: root")
+            return L.t("Folder: root", "文件夹: 根目录")
         end
         if #f > 26 then
             f = "…" .. f:sub(-24)
         end
-        return L.t("文件夹: ", "Folder: ") .. f
+        return L.t("Folder: ", "文件夹: ") .. f
     end
     local function updateFolderLabel()
         local btn = dlg.button_table and dlg.button_table.button_by_id

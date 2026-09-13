@@ -449,13 +449,7 @@ function M.showValuePicker(opts)
         zero_sep = true,
         show_parent = popup,
     }
-    local close_bt = ButtonTable:new{
-        width = pbar_w,
-        buttons = {{
-            { text = L.x(_("Close")), callback = function() UIManager:close(popup, "full") end },
-        }},
-        show_parent = popup,
-    }
+    -- v62t:关闭按钮已移除(点空白处即关闭)
 
     -- 步进行(滑条上方):-10/-1/[数值]/+1/+10,中间数值黑色显示实时更新(无操作)
     step_bt = ButtonTable:new{
@@ -474,7 +468,6 @@ function M.showValuePicker(opts)
     -- 弹窗按钮即时响应(与文字弹窗一致,公共组件)
     M.instantButtons(step_bt)
     M.instantButtons(preset_bt)
-    M.instantButtons(close_bt)
 
     -- 面板 + 统一外壳:与居中弹窗/笔触弹窗完全一致(CenterContainer→MovableContainer→
     -- FrameContainer 圆角白底)。面板拖动由 MovableContainer 内建(跟随手指、
@@ -492,8 +485,6 @@ function M.showValuePicker(opts)
             slider_wrap,
             VerticalSpan:new{ width = 3*Size.span.vertical_large }, -- 滑条与预设档位按钮拉开,防重叠/越界
             preset_bt,
-            VerticalSpan:new{ width = Size.span.vertical_default },
-            close_bt,
         },
         log = opts.log,
     }
