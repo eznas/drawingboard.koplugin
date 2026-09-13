@@ -452,7 +452,7 @@ function M.showValuePicker(opts)
     local close_bt = ButtonTable:new{
         width = pbar_w,
         buttons = {{
-            { text = L.x(_("关闭")), callback = function() UIManager:close(popup, "full") end },
+            { text = L.x(_("Close")), callback = function() UIManager:close(popup, "full") end },
         }},
         show_parent = popup,
     }

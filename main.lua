@@ -11,7 +11,7 @@
 
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local _ = require("gettext")
+local L = require("drawingpad.i18n")
 
 local DrawingBoard = WidgetContainer:extend{
     name = "drawingboard",
@@ -24,7 +24,11 @@ end
 
 function DrawingBoard:addToMainMenu(menu_items)
     menu_items.drawingboard = {
-        text = _("绘图板"),
+        -- 菜单名随界面语言(i18n 模块加载期已按 gettext.current_lang 判定);
+        -- 副作用:require 会把 <koplugin>/drawingpad/?.lua 加进 package.path 之前
+        -- 就能找到本模块——pluginloader 在 dofile(main.lua) 前已加 <koplugin>/?.lua,
+        -- 但 drawingpad 是子目录,故这里用相对包名依赖 pluginloader 的路径注入
+        text = L.t("Drawing Board", "绘图板"),
         sorting_hint = "more_tools",
         callback = function()
             local DrawingCanvas = require("drawingpad.drawing_canvas")

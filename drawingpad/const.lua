@@ -99,15 +99,16 @@ local SETTING_KEYS = {
     "menu_lang",
 }
 
+-- v62n:界面名称表统一英文源(中文经 i18n dict 查表,与 plugin_manager 同套路)
 local TOOL_NAMES = {
-    brush = "画笔",
-    eraser = "橡皮",
-    line = "直线",
-    rect = "矩形",
-    circle = "圆形",
-    text = "文字",
-    select = "选择",
-    fill = "填充",
+    brush = "Brush",
+    eraser = "Eraser",
+    line = "Line",
+    rect = "Rect",
+    circle = "Ellipse",
+    text = "Text",
+    select = "Select",
+    fill = "Fill",
 }
 
 -- 图层数:v57 起从硬编码 3 改为常量,便于以后扩展(命名槽位/锁定等)。
@@ -116,32 +117,32 @@ local TOOL_NAMES = {
 local LAYER_COUNT = 3
 
 -- 插件版本与作者(关于弹窗,2026-09-03 v59e)
-local PLUGIN_VERSION = "v62h"
+local PLUGIN_VERSION = "v62s"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);
 -- 遮挡关系按命名:上层盖中层、中层盖下层
-local LAYER_NAMES = { [1] = "下层", [2] = "中层", [3] = "上层" }
+local LAYER_NAMES = { [1] = "bottom", [2] = "middle", [3] = "top" }
 
--- 笔触形状(仅画笔/直线):内部名 → 状态栏两字缩写
+-- 笔触形状(仅画笔/直线):内部名 → 状态栏缩写
 local TIP_NAMES = {
-    circle = "圆",
-    square = "方",
-    triangle = "三",
-    triangle_inv = "倒",
-    diamond = "菱",
-    slash = "斜",
-    backslash = "反",
+    circle = "O",
+    square = "S",
+    triangle = "T",
+    triangle_inv = "V",
+    diamond = "D",
+    slash = "/",
+    backslash = "\\",
 }
 -- 笔触菜单条目(内部名,显示名)
 local TIPS = {
-    { "circle", "圆形" },
-    { "square", "方形" },
-    { "triangle", "正三角" },
-    { "triangle_inv", "倒三角" },
-    { "diamond", "菱形" },
-    { "slash", "斜线" },
-    { "backslash", "反斜线" },
+    { "circle", "Ellipse" },
+    { "square", "Square" },
+    { "triangle", "Triangle" },
+    { "triangle_inv", "Inv tri" },
+    { "diamond", "Diamond" },
+    { "slash", "Slash" },
+    { "backslash", "Backslash" },
 }
 
 -- ============================ 界面统一常量(v59) ============================

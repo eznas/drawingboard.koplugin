@@ -170,9 +170,9 @@ function M:_clearAll()
         return
     end
     UIManager:show(ConfirmBox:new{
-        text = L.x(_("确定清空当前图层?此操作不可撤销。")),
-        ok_text = L.x(_("清空")),
-        cancel_text = L.x(_("取消")),
+        text = L.x(_("Clear this layer? Cannot be undone.")),
+        ok_text = L.x(_("Clear")),
+        cancel_text = L.x(_("Cancel")),
         ok_callback = function()
             -- 只清当前层:原位重置该层的 元素/撤销/重做,保持引用关系
             self.layers[self.active_layer] = {}
@@ -204,7 +204,7 @@ end
 -- 空画板直接提示,不进对话框
 function M:_save()
     if #self.elements == 0 then
-        components.showToast(_("画板是空的,没有内容可保存。"), 2)
+        components.showToast(_("Canvas is empty, nothing to save."), 2)
         return
     end
     local dlg
@@ -229,7 +229,7 @@ function M:_save()
     dlg = InputDialog:new{
         title = L.x("保存 PNG"),
         input = os.date("drawing_%Y%m%d_%H%M%S"),
-        input_hint = L.x(_("文件名(自动补 .png)")),
+        input_hint = L.x("Filename(auto .png)"),
         buttons = {
             {
                 { id = "folder_btn", text = folderLabel(),
@@ -238,9 +238,9 @@ function M:_save()
                   end) end },
             },
             {
-                { text = L.x(_("取消")), id = "close",
+                { text = L.x(_("Cancel")), id = "close",
                   callback = function() UIManager:close(dlg) end },
-                { text = L.x(_("保存")), is_enter_default = true,
+                { text = L.x(_("Save")), is_enter_default = true,
                   callback = function()
                       local name = dlg:getInputText()
                       UIManager:close(dlg)
@@ -263,7 +263,7 @@ function M:_doSaveFlow(filename)
     end
     -- 文件名不能含路径分隔符:用户输入 "a/b" 会把 b.png 写进不存在的 a/ 目录
     if filename:find("[/\\]") then
-        components.showToast(_("文件名不能含 / 或 \\ 字符"), 3)
+        components.showToast("Filename cannot contain / or \\", 3)
         return
     end
     filename = filename .. ".png" -- 自动补扩展名
@@ -286,7 +286,7 @@ function M:_doSaveFlow(filename)
         local ok, saved_path = pcall(self._doSave, self, path)
         if ok and saved_path then
             self:_log("saved", saved_path)
-            components.showToast(L.x(_("已保存:")) .. "\n" .. saved_path, 4)
+            components.showToast(L.x("Saved:") .. "\n" .. saved_path, 4)
             return
         end
         self:_log("save failed, retrying", path, ok and "" or tostring(saved_path))
@@ -296,10 +296,10 @@ function M:_doSaveFlow(filename)
             local ok2, saved2 = pcall(self._doSave, self, retry_path)
             if ok2 and saved2 then
                 self:_log("saved (retry)", saved2)
-                components.showToast(L.x(_("已保存:")) .. "\n" .. saved2, 4)
+                components.showToast(L.x("Saved:") .. "\n" .. saved2, 4)
             else
                 self:_log("save retry failed", retry_path, ok2 and "" or tostring(saved2))
-                components.showToast(L.x(_("保存失败,请检查目录权限:")) .. "\n" .. dir)
+                components.showToast(L.x("Save failed, check folder permission:") .. "\n" .. dir)
             end
         end)
     end)
@@ -424,7 +424,7 @@ function M:_saveProject()
         end
     end
     if not has_content then
-        components.showToast(_("画板是空的,没有内容可保存。"), 2)
+        components.showToast(_("Canvas is empty, nothing to save."), 2)
         return
     end
     local dlg
@@ -456,9 +456,9 @@ function M:_saveProject()
                   callback = function() self:_pickSaveFolder(updateFolderLabel) end },
             },
             {
-                { text = L.x(_("取消")), id = "close",
+                { text = L.x(_("Cancel")), id = "close",
                   callback = function() UIManager:close(dlg) end },
-                { text = L.x(_("保存")), is_enter_default = true,
+                { text = L.x(_("Save")), is_enter_default = true,
                   callback = function()
                       local name = dlg:getInputText()
                       UIManager:close(dlg)
@@ -477,7 +477,7 @@ function M:_doSaveProjectFlow(filename)
         filename = os.date("drawing_%Y%m%d_%H%M%S")
     end
     if filename:find("[/\\]") then
-        components.showToast(_("文件名不能含 / 或 \\ 字符"), 3)
+        components.showToast("Filename cannot contain / or \\", 3)
         return
     end
     filename = filename .. ".drawing"
@@ -499,10 +499,10 @@ function M:_doSaveProjectFlow(filename)
         path = dir .. "/" .. stem .. "_" .. n .. ".drawing"
     end
     if self:_doSaveProject(path) then
-        components.showToast(L.x(_("已保存:")) .. "\n" .. path, 4)
+        components.showToast(L.x("Saved:") .. "\n" .. path, 4)
         self:_log("project saved", path)
     else
-        components.showToast(L.x(_("保存失败,请检查目录权限:")) .. "\n" .. dir, 4)
+        components.showToast(L.x("Save failed, check folder permission:") .. "\n" .. dir, 4)
     end
 end
 
@@ -520,18 +520,18 @@ end
 function M:_loadProject(path)
     local lfs = require("libs/libkoreader-lfs")
     if lfs.attributes(path, "mode") ~= "file" then
-        components.showToast(L.x(_("文件不存在:")) .. "\n" .. path, 3)
+        components.showToast(L.x("File not found:") .. "\n" .. path, 3)
         return
     end
     local chunk_ok, chunk = pcall(loadfile, path)
     if not chunk_ok or type(chunk) ~= "function" then
-        components.showToast(L.x(_("工程文件损坏:")) .. "\n" .. path, 3)
+        components.showToast(L.x("Corrupt project file:") .. "\n" .. path, 3)
         self:_log("load project: loadfile failed", path, tostring(chunk))
         return
     end
     local ok, data = pcall(chunk)
     if not ok or type(data) ~= "table" or type(data.layers) ~= "table" then
-        components.showToast(L.x(_("工程文件损坏:")) .. "\n" .. path, 3)
+        components.showToast(L.x("Corrupt project file:") .. "\n" .. path, 3)
         self:_log("load project: bad data", path)
         return
     end
@@ -587,7 +587,7 @@ function M:_loadProject(path)
     self._canvas_mask = self:_visibleMask()
     self:_renderAll()
     UIManager:setDirty(self, "full")
-    components.showToast(L.x(_("已打开:")) .. "\n" .. path, 3)
+    components.showToast(L.x("Opened:") .. "\n" .. path, 3)
     self:_log("project loaded", path)
 end
 
@@ -673,9 +673,9 @@ function M:_onClose()
     end
     if has_content then
         UIManager:show(ConfirmBox:new{
-            text = L.x(_("画板有未保存内容,确定关闭?")),
-            ok_text = L.x(_("关闭")),
-            cancel_text = L.x(_("取消")),
+            text = L.x("Unsaved content, close anyway?"),
+            ok_text = L.x(_("Close")),
+            cancel_text = L.x(_("Cancel")),
             ok_callback = doClose,
         })
     else

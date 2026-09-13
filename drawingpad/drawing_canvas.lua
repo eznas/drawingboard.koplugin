@@ -372,8 +372,11 @@ function DrawingCanvas:paintTo(bb, x, y)
         self.restore_btn:paintTo(bb, x, y + self.canvas_h - restore_h)
     end
     -- 图形工具停留 1s 显示的预览(画在屏幕 BB 上,不污染画布)
+    -- v62s:半透明图形预览直接**不透明**画(与笔迹预览同策略,用户选定):真机屏幕 BB
+    -- 是 BB8,走 _alphaBB 代理每次重绘都要整形状面积逐像素混合,大图形拖动明显卡顿;
+    -- 不透明预览走原生快路,收笔提交后画布重放即为正确半透明
     if self.preview then
-        shapes.drawElement(self:_alphaBB(bb, self.preview), self.preview, Blitbuffer.gray(self.preview.gray), x, y)
+        shapes.drawElement(bb, self.preview, Blitbuffer.gray(self.preview.gray), x, y)
     end
     -- 选择工具 拖拽(移动/旋转)停留后的预览(画在屏幕 BB,不污染画布)
     -- v61s:文字预览必须走 _drawTextTo——shapes.drawElement 不识别 text(文字渲染
@@ -389,7 +392,8 @@ function DrawingCanvas:paintTo(bb, x, y)
             tmp.y = (pv.y or 0) + y
             self:_drawTextTo(bb, tmp)
         else
-            shapes.drawElement(self:_alphaBB(bb, pv), pv, Blitbuffer.gray(pv.gray), x, y)
+            -- v62s:拖拽预览同样不透明化(速度优先,松手后画布重放恢复半透明)
+            shapes.drawElement(bb, pv, Blitbuffer.gray(pv.gray), x, y)
         end
     end
     -- 选中对象高亮框(画在屏幕 BB,不污染画布)。

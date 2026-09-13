@@ -39,6 +39,15 @@ function shapes.roundDot(bb, x, y, width, color)
     shapes.fillCircle(bb, x, y, math.max(0.5, width / 2), color)
 end
 
+-- 单位向量(v62i 实心多边形内缩用);零向量返回 {0,0}
+local function norm2(dx, dy)
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1e-6 then
+        return 0, 0
+    end
+    return dx / len, dy / len
+end
+
 -- 填充正三角(尖朝上)或倒三角(尖朝下):逐行扫描,半宽从顶点 0 线性到中心 w/2
 local function fillTriangle(bb, cx, cy, w, color, inverted)
     w = math.max(2, w)
@@ -123,6 +132,30 @@ function shapes.thickLineFill(bb, x0, y0, x1, y1, width, color)
     local y_min = math.max(0, math.floor(math.min(y0, y1) - r))
     local y_max = math.min(bb:getHeight() - 1, math.ceil(math.max(y0, y1) + r))
     local bw = bb:getWidth() - 1
+    -- 中间条带 = 平行四边形 [A+nr, B+nr, B-nr, A-nr],覆盖线段全长(含两端斜切区)。
+    -- 逐行求扫描线与四边的交点区间——只填"两偏移边都横跨"的中段会导致线段
+    -- 两端附近的条带主体缺失,斜角矩形角上露 V 形豁口(旋转后"怪异"根因)
+    -- 性能(v62p):四边端点与斜率在行循环外预计算——原来每行新建 addEdge 闭包
+    -- (每行 1 次闭包分配 + 4 次调用 + 4 次除法),整笔粗线渲染是逐段调用本函数,
+    -- 每段几十行,闭包开销占大头
+    local e1x, e1y, e1lo, e1hi, e1s, e2x, e2y, e2lo, e2hi, e2s, e3x, e3y, e3lo, e3hi, e3s, e4x, e4y, e4lo, e4hi, e4s
+    local has_edges = dy ~= 0
+    if has_edges then
+        local function edge(px, py, qx, qy)
+            -- 返回 px, py, y范围min, y范围max, 斜率;水平边无交点,斜率置 nil 供行内跳过
+            if py == qy then
+                return px, py, py, py, nil
+            end
+            local ylo, yhi = py, qy
+            if qy < py then ylo, yhi = qy, py end
+            return px, py, ylo, yhi, (qx - px) / (qy - py)
+        end
+        -- 四边:上偏移边 A+nr→B+nr,端边 B+nr→B-nr,下偏移边 B-nr→A-nr,端边 A-nr→A+nr
+        e1x, e1y, e1lo, e1hi, e1s = edge(x0 + rnx, y0 + rny, x1 + rnx, y1 + rny)
+        e2x, e2y, e2lo, e2hi, e2s = edge(x1 + rnx, y1 + rny, x1 - rnx, y1 - rny)
+        e3x, e3y, e3lo, e3hi, e3s = edge(x1 - rnx, y1 - rny, x0 - rnx, y0 - rny)
+        e4x, e4y, e4lo, e4hi, e4s = edge(x0 - rnx, y0 - rny, x0 + rnx, y0 + rny)
+    end
     for y = y_min, y_max do
         local x_lo, x_hi = math.huge, -math.huge
         -- 端盖圆盘(起点/终点)
@@ -138,27 +171,28 @@ function shapes.thickLineFill(bb, x0, y0, x1, y1, width, color)
             if x1 - h < x_lo then x_lo = x1 - h end
             if x1 + h > x_hi then x_hi = x1 + h end
         end
-        if dy ~= 0 then
-            -- 中间条带 = 平行四边形 [A+nr, B+nr, B-nr, A-nr],覆盖线段全长(含两端斜切区)。
-            -- 逐行求扫描线与四边的交点区间——只填"两偏移边都横跨"的中段会导致线段
-            -- 两端附近的条带主体缺失,斜角矩形角上露 V 形豁口(旋转后"怪异"根因)
+        if has_edges then
             local x_lo2, x_hi2 = math.huge, -math.huge
-            local function addEdge(px, py, qx, qy)
-                if py == qy then
-                    return -- 水平边不与扫描线相交于单点,跳过
-                end
-                local ylo, yhi = math.min(py, qy), math.max(py, qy)
-                if y >= ylo - 0.001 and y <= yhi + 0.001 then
-                    local x = px + (y - py) * (qx - px) / (qy - py)
-                    if x < x_lo2 then x_lo2 = x end
-                    if x > x_hi2 then x_hi2 = x end
-                end
+            if e1s and y >= e1lo - 0.001 and y <= e1hi + 0.001 then
+                local x = e1x + (y - e1y) * e1s
+                if x < x_lo2 then x_lo2 = x end
+                if x > x_hi2 then x_hi2 = x end
             end
-            -- 四边:上偏移边 A+nr→B+nr,端边 B+nr→B-nr,下偏移边 B-nr→A-nr,端边 A-nr→A+nr
-            addEdge(x0 + rnx, y0 + rny, x1 + rnx, y1 + rny)
-            addEdge(x1 + rnx, y1 + rny, x1 - rnx, y1 - rny)
-            addEdge(x1 - rnx, y1 - rny, x0 - rnx, y0 - rny)
-            addEdge(x0 - rnx, y0 - rny, x0 + rnx, y0 + rny)
+            if e2s and y >= e2lo - 0.001 and y <= e2hi + 0.001 then
+                local x = e2x + (y - e2y) * e2s
+                if x < x_lo2 then x_lo2 = x end
+                if x > x_hi2 then x_hi2 = x end
+            end
+            if e3s and y >= e3lo - 0.001 and y <= e3hi + 0.001 then
+                local x = e3x + (y - e3y) * e3s
+                if x < x_lo2 then x_lo2 = x end
+                if x > x_hi2 then x_hi2 = x end
+            end
+            if e4s and y >= e4lo - 0.001 and y <= e4hi + 0.001 then
+                local x = e4x + (y - e4y) * e4s
+                if x < x_lo2 then x_lo2 = x end
+                if x > x_hi2 then x_hi2 = x end
+            end
             if x_hi2 >= x_lo2 then
                 if x_lo2 < x_lo then x_lo = x_lo2 end
                 if x_hi2 > x_hi then x_hi = x_hi2 end
@@ -572,6 +606,8 @@ function shapes.alphaProxy(real, alpha)
     local a255 = math.max(0, math.min(255, math.floor(alpha * 255 + 0.5)))
     local blend_setter = real.setPixelBlend
     return {
+        __dp_alpha = a255, -- 半透明标记(drawFilledAlpha 判定用,与 __dp_real 成对)
+        __dp_real = real, -- 半透明实心形状单次合成用
         getWidth = function() return real:getWidth() end,
         getHeight = function() return real:getHeight() end,
         paintRect = function(_, x, y, w, h, value)
@@ -582,8 +618,86 @@ function shapes.alphaProxy(real, alpha)
 end
 
 -- 按元素类型绘制(画布重放与屏幕预览共用);颜色由调用方传入,ox/oy 为整体偏移
+
+-- 半透明元素(rect/poly/circle 实心 + freehand/eraser/line 笔迹)单次合成(v62j/v62q):
+-- 填充+描边直接画会多处交叠(描边压填充边界、四角描边带互叠+圆头笔帽小圆盘);
+-- 笔迹则是逐 ~2px 小段混合,相邻段圆头大量重叠,重叠处 alpha 反复应用 → 笔迹比
+-- 同 alpha 的路径填充(逐像素单次混合)明显更不透明。两者同一治法:整体画到临时 BB
+-- (内部不透明覆盖,交叠无所谓),再逐像素对真画布一次性 alpha 混合 → 单一透明度。
+-- ponytail: 每次重放 O(元素面积) Lua 像素循环;半透明大元素多到真机区域重放变卡时,
+-- 再按元素缓存合成结果
+function shapes.drawFilledAlpha(bb, el, color, ox, oy)
+    local Blitbuffer = require("ffi/blitbuffer")
+    local real, a255 = bb.__dp_real, bb.__dp_alpha
+    ox, oy = ox or 0, oy or 0
+    local kind = el.kind
+    local x0, y0, x1, y1
+    -- bbox 必须含 ox/oy:区域重放在"区域大小临时 BB"上用负偏移画,漏加会被
+    -- 钳制到错误范围 → 移动后半透明形状消失/显示不全
+    if kind == "rect" then
+        x0, x1 = math.min(el.x0, el.x1) + ox, math.max(el.x0, el.x1) + ox
+        y0, y1 = math.min(el.y0, el.y1) + oy, math.max(el.y0, el.y1) + oy
+    elseif kind == "line" then
+        x0, x1 = math.min(el.x0, el.x1) + ox, math.max(el.x0, el.x1) + ox
+        y0, y1 = math.min(el.y0, el.y1) + oy, math.max(el.y0, el.y1) + oy
+    elseif kind == "circle" then
+        local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
+        -- 旋转椭圆的轴对齐半宽/半高:√(rx²sin²+ry²cos²) / √(rx²cos²+ry²sin²)
+        -- (压缩后 rx≠ry,旋转 90° 时纵向投影可达 rx,只用 ry 会上下截断)
+        local rot = el.rot or 0
+        local cs, sn = math.cos(rot), math.sin(rot)
+        local hw = math.sqrt(rx * rx * cs * cs + ry * ry * sn * sn)
+        local hh = math.sqrt(rx * rx * sn * sn + ry * ry * cs * cs)
+        x0, x1 = el.cx - hw + ox, el.cx + hw + ox
+        y0, y1 = el.cy - hh + oy, el.cy + hh + oy
+    else
+        x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+        for _, p in ipairs(el.points) do
+            if p.x + ox < x0 then x0 = p.x + ox end
+            if p.x + ox > x1 then x1 = p.x + ox end
+            if p.y + oy < y0 then y0 = p.y + oy end
+            if p.y + oy > y1 then y1 = p.y + oy end
+        end
+    end
+    local pad = (el.width or 1) / 2 + 2
+    x0, y0 = math.floor(x0 - pad), math.floor(y0 - pad)
+    x1, y1 = math.ceil(x1 + pad), math.ceil(y1 + pad)
+    local cw, ch = real:getWidth(), real:getHeight()
+    x0, y0 = math.max(0, x0), math.max(0, y0)
+    x1, y1 = math.min(cw - 1, x1), math.min(ch - 1, y1)
+    if x1 < x0 or y1 < y0 then
+        return
+    end
+    local tmp = Blitbuffer.new(x1 - x0 + 1, y1 - y0 + 1, Blitbuffer.TYPE_BB8)
+    tmp:fill(Blitbuffer.COLOR_WHITE)
+    -- tmp 是真 BB(无 __dp_alpha)→ 递归走不透明路径,交叠被不透明覆盖
+    shapes.drawElement(tmp, el, color, ox - x0, oy - y0)
+    local ink = color:getColor8().a
+    local C8A, spb = Blitbuffer.Color8A, real.setPixelBlend
+    for ty = 0, y1 - y0 do
+        local sy = ty + y0
+        for tx = 0, x1 - x0 do
+            if tmp:getPixel(tx, ty).a ~= 255 then
+                spb(real, tx + x0, sy, C8A(ink, a255))
+            end
+        end
+    end
+    tmp:free()
+end
+
 function shapes.drawElement(bb, el, color, ox, oy)
     local kind = el.kind
+    -- v62j:半透明实心形状走单次合成(见 drawFilledAlpha;tmp 递归时 bb 是真 BB 不进此分支)
+    if el.filled and (kind == "rect" or kind == "poly" or kind == "circle")
+        and type(bb) == "table" and bb.__dp_real and bb.__dp_alpha and bb.__dp_alpha < 255 then
+        return shapes.drawFilledAlpha(bb, el, color, ox, oy)
+    end
+    -- v62q:半透明笔迹(freehand/eraser/line)同样单次合成——逐段混合在段间圆头重叠处
+    -- 反复应用 alpha,笔迹比同 alpha 的路径填充明显更不透明
+    if (kind == "freehand" or kind == "eraser" or kind == "line")
+        and type(bb) == "table" and bb.__dp_real and bb.__dp_alpha and bb.__dp_alpha < 255 then
+        return shapes.drawFilledAlpha(bb, el, color, ox, oy)
+    end
     if kind == "fill" then
         -- 洪泛填充结果:逐行 span 复写(区域重绘/撤销重放精确还原)。
         -- 直接遍历 span:不同行的 span 互不影响(同行的多段互不重叠),不用按行聚表
@@ -612,10 +726,26 @@ function shapes.drawElement(bb, el, color, ox, oy)
         -- 多边形(旋转后的矩形):实心先扫描线填充(v61k:不再退化为空心)再闭合描边
         local pts = el.points
         local n = #pts
+        -- v62i:半透明实心 = 填充按线宽一半内缩,否则描边叠在填充上双重混合(alpha 两次
+        -- 应用 ≈ 1-(1-a)²)显出深色轮廓;内缩后 填充与描边带相接不重叠。不透明照旧
+        local inset = 0
+        if el.filled and type(bb) == "table" and bb.__dp_alpha and bb.__dp_alpha < 255 and n >= 4 then
+            inset = math.floor(el.width / 2 + 0.5)
+        end
         if el.filled and n >= 3 then
             local poly = {}
-            for i, p in ipairs(pts) do
-                poly[i] = { p.x + (ox or 0), p.y + (oy or 0) }
+            if inset > 0 then
+                -- 每个顶点沿两条相邻边方向各内缩 inset(矩形内偏移的逐顶点公式)
+                for i, p in ipairs(pts) do
+                    local prev, nxt = pts[i == 1 and n or i - 1], pts[i == n and 1 or i + 1]
+                    local u1x, u1y = norm2(prev.x - p.x, prev.y - p.y)
+                    local u2x, u2y = norm2(nxt.x - p.x, nxt.y - p.y)
+                    poly[i] = { p.x + (u1x + u2x) * inset + (ox or 0), p.y + (u1y + u2y) * inset + (oy or 0) }
+                end
+            else
+                for i, p in ipairs(pts) do
+                    poly[i] = { p.x + (ox or 0), p.y + (oy or 0) }
+                end
             end
             local bw, bh = bb:getWidth(), bb:getHeight()
             local rows = shapes.polyRowSpans(poly)
@@ -646,8 +776,17 @@ function shapes.drawElement(bb, el, color, ox, oy)
             el.x1 + (ox or 0), el.y1 + (oy or 0), el.width, color, el.tip)
     elseif kind == "rect" then
         if el.filled then
-            shapes.fillRect(bb, el.x0 + (ox or 0), el.y0 + (oy or 0),
-                el.x1 + (ox or 0), el.y1 + (oy or 0), color)
+            -- v62i:半透明填充内缩线宽一半(见 poly 分支注释),不透明照旧铺满
+            local x0 = el.x0 + (ox or 0)
+            local y0 = el.y0 + (oy or 0)
+            local x1 = el.x1 + (ox or 0)
+            local y1 = el.y1 + (oy or 0)
+            local inset = (type(bb) == "table" and bb.__dp_alpha and bb.__dp_alpha < 255) and math.floor(el.width / 2 + 0.5) or 0
+            if inset > 0 and (x1 - x0 - 2 * inset) >= 1 and (y1 - y0 - 2 * inset) >= 1 then
+                shapes.fillRect(bb, x0 + inset, y0 + inset, x1 - inset, y1 - inset, color)
+            elseif inset == 0 then
+                shapes.fillRect(bb, x0, y0, x1, y1, color)
+            end
         end
         shapes.rect(bb, el.x0 + (ox or 0), el.y0 + (oy or 0),
             el.x1 + (ox or 0), el.y1 + (oy or 0), el.width, color, el.tip)
@@ -656,10 +795,15 @@ function shapes.drawElement(bb, el, color, ox, oy)
         local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
         local rot = el.rot or 0
         if el.filled then
-            if rot == 0 then
-                shapes.fillEllipse(bb, el.cx + (ox or 0), el.cy + (oy or 0), rx, ry, color)
-            else
-                shapes.fillRotatedEllipse(bb, el.cx + (ox or 0), el.cy + (oy or 0), rx, ry, rot, color)
+            -- v62i:半透明填充半径内缩线宽一半,与描边环带相接不重叠
+            local inset = (type(bb) == "table" and bb.__dp_alpha and bb.__dp_alpha < 255) and math.floor(el.width / 2 + 0.5) or 0
+            local irx, iry = rx - inset, ry - inset
+            if irx > 0 and iry > 0 then
+                if rot == 0 then
+                    shapes.fillEllipse(bb, el.cx + (ox or 0), el.cy + (oy or 0), irx, iry, color)
+                else
+                    shapes.fillRotatedEllipse(bb, el.cx + (ox or 0), el.cy + (oy or 0), irx, iry, rot, color)
+                end
             end
         end
         shapes.ellipse(bb, el.cx + (ox or 0), el.cy + (oy or 0), rx, ry, el.width, color, el.tip, rot)

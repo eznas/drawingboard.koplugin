@@ -56,9 +56,15 @@ function M:_renderStrokeTail(s)
     local n = #pts
     if n == 0 then return nil end
     local gray = Blitbuffer.gray(s.gray)
-    -- 半透明笔画:实时增量也走混合代理,与提交后重绘同一数学(自交叉处实时会加深,
-    -- 收笔层序重放后均匀——已知轻微跳变)
+    -- v62s:半透明笔迹实时以**不透明**灰度直接增量画进画布(与不透明笔同一条几何快路,
+    -- 计算量最小;用户选定方案"不透明灰度预览,收笔刷新再修正")。逐段混合(段间圆头
+    -- 重叠反复应用 alpha)和整笔重放(平方增长)都废弃;收笔时 live_alpha 分支整笔
+    -- 区域重放一次,把不透明预览修正成均匀半透明。
+    -- 豁免 fill 工具无意义了:fill 描边同样走不透明预览,提交时本就整区重放擦掉
     local pbb = self:_alphaBB(self.canvas_bb, s)
+    if type(pbb) == "table" and pbb.__dp_alpha and pbb.__dp_alpha < 255 then
+        pbb = self.canvas_bb
+    end
     local minx, miny, maxx, maxy
     if not s._tip_drawn then
         -- 起点全宽笔触(按下即见;起笔即全宽,起笔处的小圆弧清晰可见)。
@@ -77,7 +83,9 @@ function M:_renderStrokeTail(s)
         local k = (s._seg or 0) + 1 -- 渲染段 P_k→P_{k+1}
         local p0 = pts[math.max(1, k - 1)]
         local p1, p2, p3 = pts[k], pts[k + 1], pts[k + 2]
-        shapes.crSegment(pbb, p0, p1, p2, p3, s.width, gray, s.tip)
+        if pbb then
+            shapes.crSegment(pbb, p0, p1, p2, p3, s.width, gray, s.tip)
+        end
         minx = math.min(minx or p1.x, p0.x, p1.x, p2.x, p3.x)
         maxx = math.max(maxx or p1.x, p0.x, p1.x, p2.x, p3.x)
         miny = math.min(miny or p1.y, p0.y, p1.y, p2.y, p3.y)
@@ -100,6 +108,10 @@ function M:_renderStrokeClose(s)
     if n < 2 then return nil end
     local gray = Blitbuffer.gray(s.gray)
     local pbb = self:_alphaBB(self.canvas_bb, s)
+    -- v62s:半透明实时以不透明灰度预览(同 _renderStrokeTail)
+    if type(pbb) == "table" and pbb.__dp_alpha and pbb.__dp_alpha < 255 then
+        pbb = self.canvas_bb
+    end
     local minx, miny, maxx, maxy
     while (s._seg or 0) < n - 1 do
         local k = (s._seg or 0) + 1
@@ -167,6 +179,22 @@ end
 -- (还会按次数升级成 full 闪刷),墨水屏上就是一次闪屏;而"没区域"的含义正是
 -- "这一笔还没有墨迹需要显示"(墨迹已在 canvas_bb 里,等下一发节流或收笔那发带
 -- 区域的一起上屏),所以直接跳过是等价且更省的
+-- 半透明整笔包围盒区域(擦净重放用):单次合成画的是整支笔,擦净区域必须同样
+-- 覆盖整笔——只擦"本轮新段"会让旧前缀在每次 flush 上反复叠加 alpha(矩形阶梯马赛克)
+function M:_strokeRegion(s)
+    local minx, miny, maxx, maxy = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(s.points) do
+        if p.x < minx then minx = p.x end
+        if p.x > maxx then maxx = p.x end
+        if p.y < miny then miny = p.y end
+        if p.y > maxy then maxy = p.y end
+    end
+    if minx == math.huge then
+        return nil
+    end
+    return self:_dirtyRegion(minx, miny, maxx, maxy, (s.width or 1) + 2)
+end
+
 function M:_flushStrokeRepaint()
     if self._stroke_repaint_fn then
         UIManager:unschedule(self._stroke_repaint_fn)
@@ -181,6 +209,8 @@ function M:_flushStrokeRepaint()
     if not reg then
         return
     end
+    -- v62s:半透明实时的不透明预览无需节流回调干预(增量画进画布与不透明笔同路),
+    -- 收笔时整笔区域重放统一修正为半透明
     UIManager:setDirty(self, "partial", reg)
 end
 
@@ -246,6 +276,27 @@ function M:_finishStroke(x, y)
     -- 增量墨迹直接画进 canvas_bb 恒在最上,当前层之上有可见图层时必须
     -- 白刷+按层序重放恢复遮挡;重放画布已就绪,屏幕刷新保持原节流语义
     local region = self:_mergeRegions(last_reg, self._stroke_region)
+    -- v62q:半透明笔迹实时阶段未画进画布(整笔单次合成),元素已入 elements,
+    -- 这里必须无条件区域重放(_redrawRegion 内 drawElement 拦截走单次合成);
+    -- 不能走 _commitRegionReplay 的"上层有内容才重放"守卫
+    local t = self:_alphaBB(self.canvas_bb, s)
+    local live_alpha = type(t) == "table" and t.__dp_alpha and t.__dp_alpha < 255 or false
+    if live_alpha then
+        -- 擦净区域同样必须 = 整笔包围盒(region 只是尾段∪最后一次 flush 后的新段,
+        -- 盖不住整笔;旧前缀会残留最后一次 flush 的合成结果)
+        self._stroke_region = nil
+        self._stroke_repaint_pending = false
+        if self._stroke_repaint_fn then
+            UIManager:unschedule(self._stroke_repaint_fn)
+            self._stroke_repaint_fn = nil
+        end
+        local sreg = self:_strokeRegion(s)
+        if sreg then
+            self:_redrawRegion(sreg)
+            UIManager:setDirty(self, "partial", sreg)
+        end
+        return
+    end
     self:_commitRegionReplay(region)
     if self._stroke_repaint_pending then
         -- 节流回调挂起中:保留累积区域由回调刷屏(避免 nil 区域整屏 partial)

@@ -134,7 +134,7 @@ function M:_pickLayerAlpha()
     local n = self.active_layer
     local cur = (self.layer_alpha and self.layer_alpha[n]) or 1
     self:_showValuePicker{
-        title = "当前层透明度(100%=不透明)",
+        title = "Layer opacity(100%=opaque)",
         value = math.floor(cur * 100 + 0.5),
         min = 0,
         max = 100,
