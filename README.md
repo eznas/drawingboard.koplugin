@@ -6,6 +6,8 @@ Drawingboard adds a fullscreen canvas to KOReader on Kindle and other e-ink devi
 
 It also doubles as an **e-ink wallpaper generator**: sketch a pattern or illustration, export it as PNG, and set it as your device's sleep screen — no computer needed, fully offline.
 
+The interface is deliberately minimal — a single toolbar over a fullscreen canvas — with the deeper toolkit (layers, transforms, projects, undo history) one tap away. Light to pick up, hard to outgrow.
+
 Refresh behaviour is tuned for e-ink: partial refreshes with region merging and throttling avoid full-screen flashes and ghosting. It also works around real-device quirks such as Kindle startup-script restart loops and framebuffer contention.
 
 The plugin appears as **Drawing Board** (or **绘图板** on Chinese-language systems) in the KOReader menu.
@@ -20,6 +22,7 @@ A grayscale artwork drawn with the drawing board:
 
 ## Features
 
+- **Minimal UI, deep toolkit**: fullscreen canvas with a single toolbar; advanced features stay one tap away
 - **Brushes**: 7 stroke types, adjustable width, secondary stroke smoothing
 - **Shapes**: lines / rectangles / ellipses / solid fills, rotatable (solid shapes recompute their vertices, no self-overlap)
 - **Text**: insert anywhere; scales with its object
@@ -68,6 +71,8 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 它同时也是一个**墨水屏壁纸生成器**:随手画个图案或小插画,导出 PNG 即可设为设备待机画面 —— 不需要电脑,全程离线。
 
+界面刻意做得极简:一块全屏画布加一条工具栏,图层、变形、工程等进阶功能一步可达 —— 上手很轻,越用越深。
+
 针对墨水屏做了专门的刷新优化:局部刷新、区域合并与节流,避免整屏闪烁和残影;对真机上 KOReader 的启动脚本重启循环、帧缓冲争用等环境问题做了兼容处理。
 
 ## 界面与作品
@@ -89,6 +94,7 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 ## 功能
 
+- **界面极简,功能不简**:全屏画布 + 单一工具栏,进阶功能一步直达
 - **画笔**:7 种笔触,勾线粗细可调,墨迹二次平滑
 - **图形**:直线/矩形/椭圆/实心填充,支持旋转(实心图形按顶点重算,不穿模)
 - **文字**:任意位置输入,随对象缩放
