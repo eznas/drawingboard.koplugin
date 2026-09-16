@@ -18,8 +18,6 @@ The plugin appears as **Drawing Board** (or **绘图板** on Chinese-language sy
 
 ![Demo animation](docs/Demo.gif)
 
-▸ [Full 2-minute demo (click to play)](https://github.com/eznas/drawingboard.koplugin/blob/main/docs/Demo.mp4)
-
 ![Drawing board UI](docs/screenshot.png)
 
 A grayscale artwork drawn with the drawing board:
