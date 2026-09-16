@@ -16,6 +16,10 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 ## 界面与作品
 
+功能视频简介:
+
+![Demo animation](docs/Demo.mp4)
+
 ![绘图板界面](docs/screenshot.png)
 
 用绘图板绘制的灰度作品:
