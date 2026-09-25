@@ -1203,7 +1203,7 @@ function M:_showSettingDialog(o)
     refreshLabels()
 end
 
--- 灰度设置弹窗:最大/最小/分级数(2-256)/固定灰度(内部 0-1,显示与输入 0-100%)
+-- 灰度设置弹窗:最大/最小/分级数(2-64)/固定灰度(内部 0-1,显示与输入 0-100%)
 function M:_pickGray()
     if self.tool == "select" and self._selected then
         return self:_pickElementGray()
@@ -1228,7 +1228,7 @@ function M:_pickGray()
         spin = {
             max = { "Max gray(0%=white 100%=black)", 0, 100 },
             min = { "Min gray(0%=white 100%=black)", 0, 100 },
-            levels = { "Random levels(2-256)", 2, 256 },
+            levels = { "Random levels(2-64)", 2, 64 },
             fixed = { "Fixed gray(0%=white 100%=black)", 0, 100 },
         },
         disp = function(v) return string.format("%d%%", pct(v)) end,
@@ -1310,7 +1310,7 @@ function M:_pickElementWidth()
     }
 end
 
--- 粗细设置弹窗:最粗/最细/分级数(2-256)/固定粗细(px)
+-- 粗细设置弹窗:最粗/最细/分级数(2-64)/固定粗细(px)
 function M:_pickWidth()
     if self.tool == "select" and self._selected then
         return self:_pickElementWidth()
@@ -1334,7 +1334,7 @@ function M:_pickWidth()
         spin = {
             max = { "Thickest(px)", 1, 800 },
             min = { "Thinnest(px)", 1, 800 },
-            levels = { "Random levels(2-256)", 2, 256 },
+            levels = { "Random levels(2-64)", 2, 64 },
             fixed = { "Fixed width(px)", 1, 800 },
         },
         disp = function(v) return string.format("%d", v) end,
@@ -1342,7 +1342,7 @@ function M:_pickWidth()
     self:_log("width dialog", self.width_random and "random" or "fixed")
 end
 
--- 透明度设置弹窗:最浓/最淡/分级数(2-256)/固定透明度(内部 0-1,显示与输入 0-100%,100%=不透明)
+-- 透明度设置弹窗:最浓/最淡/分级数(2-64)/固定透明度(内部 0-1,显示与输入 0-100%,100%=不透明)
 function M:_pickAlpha()
     if self.tool == "select" and self._selected then
         return self:_pickElementAlpha()
@@ -1367,7 +1367,7 @@ function M:_pickAlpha()
         spin = {
             max = { "Max opacity(100%=opaque)", 0, 100 },
             min = { "Min opacity(100%=opaque)", 0, 100 },
-            levels = { "Random levels(2-256)", 2, 256 },
+            levels = { "Random levels(2-64)", 2, 64 },
             fixed = { "Fixed opacity(100%=opaque)", 0, 100 },
         },
         disp = function(v) return string.format("%d%%", pct(v)) end,

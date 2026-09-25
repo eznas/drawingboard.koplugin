@@ -638,19 +638,19 @@ function M:_inkDistance(el, px, py)
         local d = const.pointSegDist(px, py, el.x0, el.y0, el.x1, el.y1)
         return math.max(0, d - (el.width or 2) / 2)
     elseif el.kind == "rect" then
-        -- 实心:内部即墨迹;空心:只算四条描边
-        local b = self:_elementBBox(el)
-        if el.filled and px >= b.x0 and px <= b.x1 and py >= b.y0 and py <= b.y1 then
+        -- 实心:内部(几何边界±笔宽/2,与包围盒语义解耦)即墨迹;空心:只算四条描边
+        local pr = (el.width or 2) / 2
+        local xa, xb = math.min(el.x0, el.x1), math.max(el.x0, el.x1)
+        local ya, yb = math.min(el.y0, el.y1), math.max(el.y0, el.y1)
+        if el.filled and px >= xa - pr and px <= xb + pr and py >= ya - pr and py <= yb + pr then
             return 0
         end
         local d = math.huge
-        local xa, xb = math.min(el.x0, el.x1), math.max(el.x0, el.x1)
-        local ya, yb = math.min(el.y0, el.y1), math.max(el.y0, el.y1)
         d = math.min(d, const.pointSegDist(px, py, xa, ya, xb, ya))
         d = math.min(d, const.pointSegDist(px, py, xb, ya, xb, yb))
         d = math.min(d, const.pointSegDist(px, py, xb, yb, xa, yb))
         d = math.min(d, const.pointSegDist(px, py, xa, yb, xa, ya))
-        return math.max(0, d - (el.width or 2) / 2)
+        return math.max(0, d - pr)
     elseif el.kind == "circle" then
         -- 圆/椭圆(含旋转):变换到椭圆本地系,按归一化距离近似着墨距离
         local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
@@ -663,10 +663,12 @@ function M:_inkDistance(el, px, py)
         local dist_norm = math.sqrt((dx / rx) ^ 2 + (dy / ry) ^ 2)
         local min_r = math.min(rx, ry)
         if el.filled then
-            if dist_norm <= 1 then
+            -- 实心:墨迹延伸到描边外缘(r+笔宽/2),整段内部均为 0(粗笔边缘点选不落空)
+            local outer = 1 + (el.width or 2) / 2 / min_r
+            if dist_norm <= outer then
                 return 0
             end
-            return (dist_norm - 1) * min_r
+            return (dist_norm - outer) * min_r
         end
         -- 空心:只算椭圆周
         return math.max(0, math.abs(dist_norm - 1) * min_r - (el.width or 2) / 2)

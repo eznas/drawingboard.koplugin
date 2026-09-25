@@ -30,13 +30,15 @@ function M:onTap(_, ges)
                 self:_eraseAt(x, y)
                 committed = true
             elseif self.tool == "fill" then
-                -- 点填:洪泛填充点击点所在封闭区域;描边填模式轻点为墨点
+                -- 点填:派泛填充点击点所在封闭区域;描边填轻点不落墨(防误触残留圆点),
+                -- 仅兜底收掉漏触发收笔的进行中笔迹(退化路径由 _commitFillPath 擦除不留痕)
                 if self.fill_mode == "tap" then
                     self:_fillAt(x, y)
-                else
-                    self:_commitDot(x, y)
+                    committed = true
+                elseif self._stroke then
+                    self:_finishStroke(nil)
+                    committed = true
                 end
-                committed = true
             elseif self.tool == "brush" then
                 -- 快速轻触:产生一个墨点(防抖不拦截主动轻点);
                 -- 若上一手势遗留未收笔笔画,先按末点收笔防连接
@@ -232,10 +234,11 @@ function M:onPanRelease(_, ges)
                     self:_dirtyRegion(rx0, ry0, rx1, ry1, self._stroke.width + 2))
             end
             self:_finishStroke(nil)
-        else
+        elseif self.tool ~= "fill" then
+            -- 单点/无微轨迹 = 快速轻点:画笔仍出墨点;描边填不落墨(防误触圆点)
             self:_commitDot(p.x, p.y)
+            committed = true
         end
-        committed = true
     elseif self._shape_start then
         -- 图形工具 / 矩形框擦:用最后更新的点一次确认
         local x, y

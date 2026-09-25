@@ -70,9 +70,11 @@ function M:_elementBBox(el)
         if x1 > maxx then maxx = x1 end
         if y1 > maxy then maxy = y1 end
     end
+    local pen_r = (el.width or 2) / 2
     if el.kind == "circle" then
-        -- 圆/椭圆(含旋转)的外接轴对齐包围盒
-        local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
+        -- 圆/椭圆(含旋转)的外接轴对齐包围盒(计入笔宽外扩)
+        local rx = (el.rx or el.r) + pen_r
+        local ry = (el.ry or el.rx or el.r) + pen_r
         local rot = el.rot or 0
         if rot == 0 then
             add(el.cx - rx, el.cy - ry, el.cx + rx, el.cy + ry)
@@ -83,11 +85,11 @@ function M:_elementBBox(el)
             add(el.cx - hw, el.cy - hh, el.cx + hw, el.cy + hh)
         end
     elseif el.kind == "line" or el.kind == "rect" then
-        add(math.min(el.x0, el.x1), math.min(el.y0, el.y1),
-            math.max(el.x0, el.x1), math.max(el.y0, el.y1))
+        add(math.min(el.x0, el.x1) - pen_r, math.min(el.y0, el.y1) - pen_r,
+            math.max(el.x0, el.x1) + pen_r, math.max(el.y0, el.y1) + pen_r)
     elseif el.kind == "freehand" or el.kind == "eraser" or el.kind == "poly" then
         for _, p in ipairs(el.points) do
-            add(p.x - el.width, p.y - el.width, p.x + el.width, p.y + el.width)
+            add(p.x - pen_r, p.y - pen_r, p.x + pen_r, p.y + pen_r)
         end
     elseif el.kind == "fill" then
         -- 洪泛填充结果:span 列表 {y, x0, x1} 的包围盒
@@ -323,13 +325,37 @@ function M:_scaleElement(el, sb, nb)
         el.x0, el.y0 = map(el.x0, el.y0)
         el.x1, el.y1 = map(el.x1, el.y1)
     elseif el.kind == "rect" then
-        el.x0, el.y0 = map(el.x0, el.y0)
-        el.x1, el.y1 = map(el.x1, el.y1)
+        local pen_r = (el.width or 2) / 2
+        local x_min, x_max, y_min, y_max
+        if nb.x1 - nb.x0 > 2 * pen_r then
+            x_min, x_max = nb.x0 + pen_r, nb.x1 - pen_r
+        else
+            local cx = (nb.x0 + nb.x1) / 2
+            x_min, x_max = cx, cx
+        end
+        if nb.y1 - nb.y0 > 2 * pen_r then
+            y_min, y_max = nb.y0 + pen_r, nb.y1 - pen_r
+        else
+            local cy = (nb.y0 + nb.y1) / 2
+            y_min, y_max = cy, cy
+        end
+        if el.x0 <= el.x1 then
+            el.x0, el.x1 = x_min, x_max
+        else
+            el.x0, el.x1 = x_max, x_min
+        end
+        if el.y0 <= el.y1 then
+            el.y0, el.y1 = y_min, y_max
+        else
+            el.y0, el.y1 = y_max, y_min
+        end
     elseif el.kind == "circle" then
-        -- 圆/椭圆:中心映射,rx/ry 按各轴因子缩放(非等比 → 椭圆)
-        el.cx, el.cy = map(el.cx, el.cy)
-        el.rx = math.max(1, (el.rx or el.r) * sx)
-        el.ry = math.max(1, (el.ry or el.rx or el.r) * sy)
+        -- 圆/椭圆:按包含笔宽的外包围盒映射,防止固定边漂移
+        local pen_r = (el.width or 2) / 2
+        el.cx = (nb.x0 + nb.x1) / 2
+        el.cy = (nb.y0 + nb.y1) / 2
+        el.rx = math.max(1, (nb.x1 - nb.x0) / 2 - pen_r)
+        el.ry = math.max(1, (nb.y1 - nb.y0) / 2 - pen_r)
     elseif el.kind == "text" then
         -- 均匀部分进字号(字形清晰),残余非均匀进 sx/sy(渲染时像素缩放成拉伸字形)
         local f = (sx + sy) / 2
@@ -413,7 +439,9 @@ function M:_scaleElementOriented(el, handle, x, y)
         if (el.rot or 0) == 0 then
             return false
         end
-        local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
+        local pen_r = (el.width or 2) / 2
+        local rx = (el.rx or el.r) + pen_r
+        local ry = (el.ry or el.rx or el.r) + pen_r
         local c, s = math.cos(el.rot), math.sin(el.rot)
         ux, uy, vx, vy = c, s, -s, c
         F = {
