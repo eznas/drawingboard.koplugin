@@ -163,6 +163,9 @@ function M.showCenteredDialog(opts)
     local ok_size, msize = pcall(function() return mc:getSize() end)
     local pw = ok_size and msize and msize.w or 0
     local ph = ok_size and msize and msize.h or 0
+    -- v62z: 刷新区域只取面板矩形(整屏 ui 刷新在真机上要 1-2s,是弹一级菜单慢的根因);
+    -- 尺寸预估失败时退回整屏,保证可见性
+    local refresh_region
     if pw > 0 and ph > 0 then
         local px = opts.anchor_x
             and math.floor(opts.anchor_x - pw / 2)
@@ -173,6 +176,7 @@ function M.showCenteredDialog(opts)
             dimen = Geom:new{ x = px, y = py, w = pw, h = ph },
             mc,
         }
+        refresh_region = Geom:new{ x = px, y = py, w = pw, h = ph }
     else
         -- 尺寸预计算失败:退回底部居中(BottomContainer),至少保证完整可见
         popup[1] = BottomContainer:new{
@@ -187,7 +191,7 @@ function M.showCenteredDialog(opts)
     -- 显式传刷新类型+区域:本树 UIManager._refresh 对 nil 模式直接丢弃(避免无谓全屏刷),
     -- 不传的话弹窗只进 framebuffer、硬件永不刷新 → "弹窗看不见,拖动后才出现"。
     -- "ui" = 非闪烁刷新;区域用 modal 全屏 dimen(与关闭时画布全屏重绘一致)。
-    UIManager:show(popup, "ui", popup.dimen)
+    UIManager:show(popup, "ui", refresh_region or popup.dimen)
     return popup, mc
 end
 

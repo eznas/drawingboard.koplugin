@@ -612,7 +612,13 @@ function M:_statusText()
     end
     local layer_txt = L.x(const.LAYER_NAMES[self.active_layer])
         .. (self.layer_visible[self.active_layer] and "" or L.t("(hide)", "(隐)"))
-    -- 透明度(下次落笔):随机或非全不透明时才显示,省状态栏宽度
+    -- 透明度(下次落笔):随机或非全不透明时才显示,省状态栏宽度;
+    -- 混合模式非正常时叠标记(叠=正片叠底,淡=线性减淡)
+    if self.alpha_blend == "multiply" then
+        layer_txt = layer_txt .. L.t("*", "叠")
+    elseif self.alpha_blend == "dodge" then
+        layer_txt = layer_txt .. L.t("+", "淡")
+    end
     if self.alpha_random then
         layer_txt = layer_txt .. string.format(L.t(" O:rand(%d-%d)", " 透:随机(%d-%d)"),
             math.floor((self.alpha_min or 0.3) * 100 + 0.5), math.floor((self.alpha_max or 1) * 100 + 0.5))
@@ -1010,6 +1016,7 @@ function M:_commitText(x, y, text)
         size = self.font_size,
         gray = self:_resolveGray(),
         alpha = self:_resolveAlpha(),
+        blend = self.alpha_blend,
     }
     table.insert(self.elements, el)
     self:_cacheBBox(el)
@@ -1079,6 +1086,13 @@ function M:_drawTextTo(bb, el, layer_idx)
         math.abs(x1 * sn + y1 * c), math.abs(x0 * sn + y1 * c))
     local x_min, x_max = math.max(0, math.floor(ax - hw)), math.min(bb:getWidth() - 1, math.ceil(ax + hw))
     local y_min, y_max = math.max(0, math.floor(ay - hh)), math.min(bb:getHeight() - 1, math.ceil(ay + hh))
+    -- 混合模式随元素(创建时记录);multiply/dodge 需读 dest,仅 BB8 画布启用
+    -- (拖拽预览的 bb 是屏幕帧缓冲,模拟器为 ColorRGB32,读 .a 会崩 → 回退 normal)
+    local mode = el.blend or "normal"
+    local okt, ttype = pcall(bb.getType, bb)
+    local read_dest = okt and ttype == Blitbuffer.TYPE_BB8
+        and (mode == "multiply" or mode == "dodge")
+    local ink8 = math.floor(255 * (1 - (el.gray or 1)) + 0.5)
     for py = y_min, y_max do
         for px = x_min, x_max do
             -- 逆旋转到缩放局部系,再逆缩放到自然系
@@ -1092,13 +1106,15 @@ function M:_drawTextTo(bb, el, layer_idx)
                 if a8 and a8 < 255 then
                     if alpha < 0.999 then
                         -- 墨量 m=(255−a8)/255,把墨色按"m·α 不透明度"合成到 dest
-                        -- (out = dest·(1−mα) + 墨色·mα)。直接用原生 setPixelBlend:
-                        -- 不读 dest 像素(拖拽预览的 bb 是屏幕帧缓冲,模拟器为
-                        -- ColorRGB32,读 .a 会崩),且 BB8/RGB32 各类型都正确
+                        -- (out = dest·(1−mα) + 墨色·mα)。normal 用原生 setPixelBlend:
+                        -- 不读 dest 像素且 BB8/RGB32 各类型都正确
                         local coverage = math.floor((255 - a8) * alpha + 0.5)
                         if coverage > 0 then
-                            bb:setPixelBlend(px, py, Blitbuffer.Color8A(
-                                math.floor(255 * (1 - (el.gray or 1)) + 0.5), coverage))
+                            if read_dest then
+                                shapes.blendModePixel(bb, px, py, ink8, coverage, mode)
+                            else
+                                bb:setPixelBlend(px, py, Blitbuffer.Color8A(ink8, coverage))
+                            end
                         end
                     else
                         bb:setPixel(px, py, Blitbuffer.Color8(a8))
@@ -1138,6 +1154,9 @@ function M:_showSettingDialog(o)
             string.format(L.t("Levels:%d", "分级:%d"), o.get.levels(self)),
             string.format(L.t("Fixed:%s", "固定:%s"), o.disp(o.get.fixed(self))),
         }
+        if o.mode then
+            l[5] = o.mode.label(self)
+        end
         return l
     end
     local bt
@@ -1153,7 +1172,12 @@ function M:_showSettingDialog(o)
             end
         end
         if popup then
-            UIManager:setDirty(popup, "partial")
+            -- v62z: 只刷面板矩形(不带区域的 partial = 整屏刷新,真机 1-2s,是弹窗慢的元凶)
+            if popup[1] and popup[1].dimen then
+                UIManager:setDirty(popup, "ui", popup[1].dimen)
+            else
+                UIManager:setDirty(popup, "partial")
+            end
         end
     end
     local function spinval(key)
@@ -1199,6 +1223,16 @@ function M:_showSettingDialog(o)
               end },
         },
     }
+    -- 可选附加行(仅透明度弹窗):混合模式 单键循环 正常→正片叠底→线性减淡
+    if o.mode then
+        table.insert(btns, {
+            { id = o.ids[5], text = o.mode.label(self),
+              callback = function()
+                  o.mode.cycle(self)
+                  refreshLabels()
+              end },
+        })
+    end
     bt, popup = self:_showCenteredButtons(o.title, btns, const.UI_WIDTH_MEDIUM)
     refreshLabels()
 end
@@ -1350,7 +1384,30 @@ function M:_pickAlpha()
     local function pct(v) return math.floor(v * 100 + 0.5) end
     self:_showSettingDialog{
         title = "Opacity",
-        ids = { "alpha_max_btn", "alpha_min_btn", "alpha_levels_btn", "alpha_fixed_btn" },
+        ids = { "alpha_max_btn", "alpha_min_btn", "alpha_levels_btn", "alpha_fixed_btn", "alpha_blend_btn" },
+        -- 混合模式(仅影响新落笔元素的透明度叠加;点击循环切换)
+        mode = {
+            label = function(s)
+                local m = s.alpha_blend or "normal"
+                if m == "multiply" then
+                    return L.t("Blend:Multiply", "混合:正片叠底")
+                elseif m == "dodge" then
+                    return L.t("Blend:Dodge", "混合:线性减淡")
+                end
+                return L.t("Blend:Normal", "混合:正常")
+            end,
+            cycle = function(s)
+                local m = s.alpha_blend or "normal"
+                if m == "normal" then
+                    s.alpha_blend = "multiply"
+                elseif m == "multiply" then
+                    s.alpha_blend = "dodge"
+                else
+                    s.alpha_blend = "normal"
+                end
+                s:_log("alpha blend ->", s.alpha_blend)
+            end,
+        },
         labels = { max = "Max", min = "Min" },
         get = {
             max = function(s) return s.alpha_max end,

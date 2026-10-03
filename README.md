@@ -16,14 +16,11 @@ The plugin appears as **Drawing Board** (or **绘图板** on Chinese-language sy
 
 ## Screenshots
 
-![Demo animation](docs/Demo.gif)
-
 ![Drawing board UI](docs/screenshot.png)
 
 A grayscale artwork drawn with the drawing board:
 
 ![Grayscale artwork example](docs/artwork_hulk.png)
-
 
 ## Features
 

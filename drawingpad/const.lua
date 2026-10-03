@@ -94,6 +94,7 @@ local SETTING_KEYS = {
     "gray", "gray_min", "gray_max", "gray_levels", "gray_random",
     "width", "width_min", "width_max", "width_levels", "width_random",
     "alpha", "alpha_min", "alpha_max", "alpha_levels", "alpha_random",
+    "alpha_blend",
     "tip", "save_folder",
     "font", "font_size",
     "menu_lang",
@@ -117,7 +118,7 @@ local TOOL_NAMES = {
 local LAYER_COUNT = 3
 
 -- 插件版本与作者(关于弹窗;版本与 GitHub eznas/drawingboard.koplugin 保持一致或更高)
-local PLUGIN_VERSION = "v62u"
+local PLUGIN_VERSION = "v63"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);

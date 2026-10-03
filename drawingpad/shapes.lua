@@ -601,18 +601,113 @@ end
 -- shapes 全部原语只用 paintRect/getWidth/getHeight(见文件头),代理包装即对全部元素生效。
 -- 坐标/裁剪/负偏移交给 real:paintRect 原生处理;混合走 setPixelBlend 逐像素 setter。
 -- ponytail: 逐像素 Lua setter,整幅大填充约 0.1s 级(仅提交/重绘时一次);不够快再换 getPixelP 指针循环
-function shapes.alphaProxy(real, alpha)
+-- 混合模式(灰度画布,ink=墨色灰度 0 黑~255 白,d=目标像素,a255=不透明度 0-255):
+--   normal   直通 alpha: out = d + a·(ink-d)(原生 setPixelBlend,不读 dest)
+--   multiply 正片叠底: out = (1-a)·d + a·ink·d/255 —— 墨与下层相乘,叠墨越叠越深
+--   dodge    线性减淡: out = (1-a)·d + a·min(255, ink+d) —— 加色提亮,深墨近乎不变
+-- multiply/dodge 必须读 dest,只能逐像素 Lua(blendModePixel);调用方须保证 bb 是
+-- BB8 画布/区域临时 BB(_alphaBB 已做类型守卫,屏幕预览 BB 回退不透明/normal)
+function shapes.blendModePixel(bb, x, y, ink, a255, mode)
+    local Blitbuffer = require("ffi/blitbuffer")
+    local d = bb:getPixel(x, y).a
+    local out
+    if mode == "multiply" then
+        out = d * (65025 - a255 * (255 - ink)) / 65025
+    elseif mode == "dodge" then
+        local add = ink + d
+        if add > 255 then add = 255 end
+        out = (d * (255 - a255) + add * a255) / 255
+    else
+        out = (d * (255 - a255) + ink * a255) / 255
+    end
+    out = math.floor(out + 0.5)
+    if out < 0 then out = 0 elseif out > 255 then out = 255 end
+    bb:setPixel(x, y, Blitbuffer.Color8(out))
+end
+
+-- 混合模式快路(v63b):对固定 (ink, a255, mode),out 只依赖 dest 字节(0-255)
+-- → 预计算 256 项查找表(uint8 数组),混合循环每像素零 FFI 函数调用。
+-- 表达式与 blendModePixel 逐项一致(乘除顺序不变,浮点同点),有 256 全值断言
+function shapes.buildBlendLUT(mode, ink, a255)
+    local ffi = require("ffi")
+    local lut = ffi.new("uint8_t[256]")
+    local na = 255 - a255
+    if mode == "multiply" then
+        for d = 0, 255 do
+            local out = math.floor(d * (65025 - a255 * (255 - ink)) / 65025 + 0.5)
+            if out < 0 then out = 0 elseif out > 255 then out = 255 end
+            lut[d] = out
+        end
+    elseif mode == "dodge" then
+        for d = 0, 255 do
+            local add = ink + d
+            if add > 255 then add = 255 end
+            local out = math.floor((d * na + add * a255) / 255 + 0.5)
+            if out < 0 then out = 0 elseif out > 255 then out = 255 end
+            lut[d] = out
+        end
+    else
+        for d = 0, 255 do
+            local out = math.floor((d * na + ink * a255) / 255 + 0.5)
+            if out < 0 then out = 0 elseif out > 255 then out = 255 end
+            lut[d] = out
+        end
+    end
+    return lut
+end
+
+-- LUT 行混合:BB8(BlitBuffer8)像素 = Color8(1 字节)连续排布,cast 成 uint8_t*
+-- 后 row[x] 直接数值读写,零 FFI 函数调用。
+-- 调用方保证 real 为 BB8、rotation=0、inverse=0(见 drawFilledAlpha/alphaProxy 守卫)
+function shapes.blendRowLUT(real, x0, x1, y, lut)
+    local ffi = require("ffi")
+    local row = ffi.cast("uint8_t*", real.data) + real.stride * y
+    for x = x0, x1 do
+        row[x] = lut[row[x]]
+    end
+end
+
+-- 半透明渲染代理:拦截 paintRect,把墨色按 alpha(0-1)真混合到目标 BB 现有像素上
+-- (dest = α·墨色 + (1-α)·dest):白底上等于变浅,叠在墨迹上则透出下层(纯灰度做不到)。
+-- shapes 全部原语只用 paintRect/getWidth/getHeight(见文件头),代理包装即对全部元素生效。
+-- 坐标/裁剪/负偏移交给 real:paintRect 原生处理;混合走 setPixelBlend 逐像素 setter。
+-- mode(可省,默认 normal)= 透明度混合模式,见 blendModePixel;三模式全部走
+-- BB8 指针行混合 + LUT(守卫 rotation/inverse,异常回退原生逐像素 setter)
+-- ponytail: 快路每像素零 FFI 调用;慢路径(原生 setter)仅旋转/inverse 画布
+function shapes.alphaProxy(real, alpha, mode)
     local Blitbuffer = require("ffi/blitbuffer")
     local a255 = math.max(0, math.min(255, math.floor(alpha * 255 + 0.5)))
     local blend_setter = real.setPixelBlend
+    -- 单槽 LUT 缓存:同一元素 ink 恒定,描边填按行 paintRect 不重复构造
+    local lut, lut_ink
     return {
         __dp_alpha = a255, -- 半透明标记(drawFilledAlpha 判定用,与 __dp_real 成对)
         __dp_real = real, -- 半透明实心形状单次合成用
+        __dp_blend = mode or "normal", -- 混合模式(drawFilledAlpha/文字写回共用)
         getWidth = function() return real:getWidth() end,
         getHeight = function() return real:getHeight() end,
         paintRect = function(_, x, y, w, h, value)
             local v = value:getColor8()
-            real:paintRect(x, y, w, h, Blitbuffer.Color8A(v.a, a255), blend_setter)
+            if real:getRotation() == 0 and real:getInverse() == 0 then
+                local ink = v.a
+                if lut_ink ~= ink then
+                    lut = shapes.buildBlendLUT(mode, ink, a255)
+                    lut_ink = ink
+                end
+                -- 手动裁剪(仿 getBoundedRect:BB8 自建画布无旋转,画布坐标恒等映射)
+                local rw, rh = real:getWidth(), real:getHeight()
+                local X0, Y0 = x, y
+                local X1, Y1 = x + w - 1, y + h - 1
+                if X0 < 0 then X0 = 0 end
+                if Y0 < 0 then Y0 = 0 end
+                if X1 > rw - 1 then X1 = rw - 1 end
+                if Y1 > rh - 1 then Y1 = rh - 1 end
+                for yy = Y0, Y1 do
+                    shapes.blendRowLUT(real, X0, X1, yy, lut)
+                end
+            else
+                real:paintRect(x, y, w, h, Blitbuffer.Color8A(v.a, a255), blend_setter)
+            end
         end,
     }
 end
@@ -673,12 +768,42 @@ function shapes.drawFilledAlpha(bb, el, color, ox, oy)
     -- tmp 是真 BB(无 __dp_alpha)→ 递归走不透明路径,交叠被不透明覆盖
     shapes.drawElement(tmp, el, color, ox - x0, oy - y0)
     local ink = color:getColor8().a
+    -- 混合模式:随代理记录(per-element,区域重绘复现一致);三模式全部 LUT 化
+    -- (normal 公式同样只依赖 dest 字节,快路比原生 setPixelBlend setter 回调快 ~6x)
+    local mode = bb.__dp_blend or "normal"
+    if real:getRotation() == 0 and real:getInverse() == 0 then
+        -- 快路(v63b/c):tmp 掩码与 dest 均为 BB8 字节布局,指针直读写 + 256 项 LUT,
+        -- 每像素零 FFI 调用——叠加多层后收笔区域重放 O(层数×面积) 的逐像素 Lua
+        -- 回调是卡顿主因(基线 8 层 400×400 相交重放 185ms → 快路后见 blend_bench)
+        local lut = shapes.buildBlendLUT(mode, ink, a255)
+        -- BlitBuffer8.data 是 Color8*(1 字节 struct),cast uint8_t* 后数值读写
+        local ffi = require("ffi")
+        local tbase = ffi.cast("uint8_t*", tmp.data)
+        local rbase = ffi.cast("uint8_t*", real.data)
+        for ty = 0, y1 - y0 do
+            local trow = tbase + tmp.stride * ty
+            local rrow = rbase + real.stride * (ty + y0)
+            for tx = 0, x1 - x0 do
+                if trow[tx] ~= 255 then
+                    local rx = tx + x0
+                    rrow[rx] = lut[rrow[rx]]
+                end
+            end
+        end
+        tmp:free()
+        return
+    end
+    -- 旋转/inverse 异常兜底:逐像素 setter(三模式)
     local C8A, spb = Blitbuffer.Color8A, real.setPixelBlend
     for ty = 0, y1 - y0 do
         local sy = ty + y0
         for tx = 0, x1 - x0 do
             if tmp:getPixel(tx, ty).a ~= 255 then
-                spb(real, tx + x0, sy, C8A(ink, a255))
+                if mode == "multiply" or mode == "dodge" then
+                    shapes.blendModePixel(real, tx + x0, sy, ink, a255, mode)
+                else
+                    spb(real, tx + x0, sy, C8A(ink, a255))
+                end
             end
         end
     end

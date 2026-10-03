@@ -124,7 +124,7 @@ function M:onPan(_, ges)
                         kind = "freehand",
                         points = points,
                         gray = self:_resolveGray(),
-                        alpha = self:_resolveAlpha(),
+                        alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                         -- 描边填:描边固定 1px(只界定区域,不随粗细设置)
                         width = (self.tool == "fill") and 1 or self:_resolveWidth(),
                         tip = self.tip,
@@ -224,7 +224,7 @@ function M:onPanRelease(_, ges)
                 kind = "freehand",
                 points = points,
                 gray = self:_resolveGray(),
-                alpha = self:_resolveAlpha(),
+                alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                 width = (self.tool == "fill") and 1 or self:_resolveWidth(),
                 tip = self.tip,
             }
@@ -379,7 +379,7 @@ function M:onSwipe(_, ges)
                 kind = "freehand",
                 points = points,
                 gray = self:_resolveGray(),
-                alpha = self:_resolveAlpha(),
+                alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                 width = (tool == "fill") and 1 or self:_resolveWidth(),
                 tip = self.tip,
             }
@@ -400,7 +400,7 @@ function M:onSwipe(_, ges)
                 kind = "freehand",
                 points = { { x = sx, y = sy }, { x = x, y = y } },
                 gray = self:_resolveGray(),
-                alpha = self:_resolveAlpha(),
+                alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                 width = self:_resolveWidth(),
                 tip = self.tip,
             }
@@ -467,7 +467,7 @@ function M:onHold(_, ges)
                 kind = "freehand",
                 points = points,
                 gray = self:_resolveGray(),
-                alpha = self:_resolveAlpha(),
+                alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                 -- 描边填:描边固定 1px(只界定区域,不随粗细设置)
                 width = (self.tool == "fill") and 1 or self:_resolveWidth(),
                 tip = self.tip,

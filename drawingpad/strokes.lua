@@ -387,6 +387,7 @@ function M:_commitDot(x, y)
         points = { { x = x, y = y } },
         gray = self:_resolveGray(),
         alpha = self:_resolveAlpha(),
+        blend = self.alpha_blend,
         width = self:_resolveWidth(),
         tip = self.tip,
     }
@@ -425,6 +426,7 @@ function M:_trackShapeAnchor(ges)
             gray = self:_resolveGray(),
             width = self:_resolveWidth(),
             alpha = self:_resolveAlpha(),
+            blend = self.alpha_blend,
         }
     end
     self:_scheduleShapePreview(x, y)
@@ -463,7 +465,7 @@ function M:_maybeShowShapePreview()
     if not (start and pos) then
         return
     end
-    self.preview = self:_buildShapeElement(self.tool, start.x, start.y, pos.x, pos.y, start.gray, start.width, start.alpha)
+    self.preview = self:_buildShapeElement(self.tool, start.x, start.y, pos.x, pos.y, start.gray, start.width, start.alpha, start.blend)
     if self.preview and not self:_shapeIsEmpty(self.preview) then
         self._shape_preview_region = self:_elementRegion(self.preview)
         self:_log("preview shown", self.preview.kind)
@@ -482,26 +484,27 @@ function M:_cancelShapePreview()
     self.preview = nil
 end
 
-function M:_buildShapeElement(tool, x0, y0, x1, y1, gray, width, alpha)
+function M:_buildShapeElement(tool, x0, y0, x1, y1, gray, width, alpha, blend)
     if type(x0) ~= "number" or type(y0) ~= "number" or type(x1) ~= "number" or type(y1) ~= "number" then
         self:_log("_buildShapeElement: invalid coords", tool, x0, y0, x1, y1)
         return nil
     end
     -- 灰度/粗细/透明度:起笔时(_trackShapeAnchor)取一次固定,预览与提交一致;
-    -- 未传(旧调用/兜底)时现场取一次
+    -- 未传(旧调用/兜底)时现场取一次。混合模式同理(随元素记录)
     gray = gray or self:_resolveGray()
     width = width or self:_resolveWidth()
     alpha = alpha or self:_resolveAlpha()
+    blend = blend or self.alpha_blend
     if tool == "line" then
         -- 直线(画笔长按切换的工具)带笔触形状;矩形/圆形保持圆笔触
-        return { kind = "line", x0 = x0, y0 = y0, x1 = x1, y1 = y1, gray = gray, width = width, alpha = alpha, tip = self.tip }
+        return { kind = "line", x0 = x0, y0 = y0, x1 = x1, y1 = y1, gray = gray, width = width, alpha = alpha, blend = blend, tip = self.tip }
     elseif tool == "rect" then
         return { kind = "rect", x0 = x0, y0 = y0, x1 = x1, y1 = y1,
-            gray = gray, width = width, alpha = alpha, filled = self.rect_filled }
+            gray = gray, width = width, alpha = alpha, blend = blend, filled = self.rect_filled }
     elseif tool == "circle" then
         local r = math.sqrt((x1 - x0) ^ 2 + (y1 - y0) ^ 2)
         return { kind = "circle", cx = x0, cy = y0, rx = r, ry = r,
-            gray = gray, width = width, alpha = alpha, filled = self.circle_filled }
+            gray = gray, width = width, alpha = alpha, blend = blend, filled = self.circle_filled }
     elseif tool == "eraser" then
         -- 矩形框橡皮:预览画半灰实心矩形(可见),提交时 _commitShape 改为白色擦除
         return { kind = "rect", x0 = x0, y0 = y0, x1 = x1, y1 = y1,
@@ -525,7 +528,7 @@ function M:_commitShape(x, y)
         return
     end
     local x1, y1 = x or start.x, y or start.y
-    local el = self:_buildShapeElement(self.tool, start.x, start.y, x1, y1, start.gray, start.width, start.alpha)
+    local el = self:_buildShapeElement(self.tool, start.x, start.y, x1, y1, start.gray, start.width, start.alpha, start.blend)
     if not el then
         if prev_region then
             UIManager:setDirty(self, "partial", prev_region)
@@ -898,7 +901,7 @@ function M:_fillAt(x, y)
     if not spans or #spans == 0 then
         return
     end
-    local el = { kind = "fill", spans = spans, gray = self:_resolveGray(), alpha = self:_resolveAlpha() }
+    local el = { kind = "fill", spans = spans, gray = self:_resolveGray(), alpha = self:_resolveAlpha(), blend = self.alpha_blend }
     table.insert(self.elements, el)
     self:_cacheBBox(el)
     self:_pushUndo({ kind = "add", el = el })
@@ -1035,7 +1038,8 @@ function M:_commitFillPath(s)
     -- src_points 保存平滑后源顶点:后续旋转/缩放只变换顶点重算 spans,
     -- 不再从量化 span 反建几何,避免逐次变换向外漂移(穿模细线)
     local el = { kind = "fill", spans = spans, src_points = smooth,
-        gray = s.gray or self:_resolveGray(), alpha = s.alpha or self:_resolveAlpha() }
+        gray = s.gray or self:_resolveGray(), alpha = s.alpha or self:_resolveAlpha(),
+        blend = s.blend or self.alpha_blend }
     table.insert(self.elements, el)
     self:_cacheBBox(el)
     self:_pushUndo({ kind = "add", el = el }) -- 单条撤销记录(一次撤销即清空填充)
