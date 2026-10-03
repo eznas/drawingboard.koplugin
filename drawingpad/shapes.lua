@@ -754,7 +754,12 @@ function shapes.drawFilledAlpha(bb, el, color, ox, oy)
             if p.y + oy > y1 then y1 = p.y + oy end
         end
     end
-    local pad = (el.width or 1) / 2 + 2
+    -- 笔尖形状超出采样点的最大半径(单边,按 width 系数):circle/diamond=0.5;
+    -- square/triangle 底角=0.71;slash/backslash=对角 0.707w+条带 t/2(max(2,w/3))≈0.87。
+    -- 旧 pad(0.5w+2)对圆/菱形够用,大宽度斜线笔尖被 tmp 裁掉 → 笔迹四角被切
+    -- (任何非 100% 透明度都走 tmp 合成,与透明度数值无关)
+    local TIP_PAD = { slash = 0.88, backslash = 0.88, square = 0.72, triangle = 0.72, triangle_inv = 0.72 }
+    local pad = (el.width or 1) * (TIP_PAD[el.tip] or 0.5) + 2
     x0, y0 = math.floor(x0 - pad), math.floor(y0 - pad)
     x1, y1 = math.ceil(x1 + pad), math.ceil(y1 + pad)
     local cw, ch = real:getWidth(), real:getHeight()

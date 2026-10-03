@@ -261,6 +261,41 @@ section("SETTING_KEYS has alpha_blend", function()
     check(found, "alpha_blend not in SETTING_KEYS")
 end)
 
+-- 7b. 粗斜线笔尖半透明不被裁(回归:tmp pad 只算 0.5w 时 slash 笔尖四角被切)
+section("thick slash tip not clipped in alpha compositing", function()
+    -- slash 笔尖半径 = 0.707w + 条带 t/2(max(2,w/3)) ≈ 0.87w;w=100 → 87px,
+    -- 旧 pad(52px)会把超出部分裁掉 → 半透明墨迹 bbox 比近不透明小 30+px
+    local function inkBBox(alpha)
+        local bb = Blitbuffer.new(300, 300, Blitbuffer.TYPE_BB8)
+        bb:paintRect(0, 0, 300, 300, Blitbuffer.COLOR_WHITE)
+        local el = { kind = "freehand", points = { { x = 150, y = 150 } },
+            width = 100, gray = 1.0, alpha = alpha, tip = "slash" }
+        shapes.drawElement(shapes.alphaProxy(bb, alpha, "normal"), el, Blitbuffer.gray(el.gray))
+        local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+        for yy = 0, 299 do
+            for xx = 0, 299 do
+                if px(bb, xx, yy) < 250 then
+                    if xx < x0 then x0 = xx end
+                    if xx > x1 then x1 = xx end
+                    if yy < y0 then y0 = yy end
+                    if yy > y1 then y1 = yy end
+                end
+            end
+        end
+        bb:free()
+        return x0, y0, x1, y1
+    end
+    local ox0, oy0, ox1, oy1 = inkBBox(0.99) -- a255=252,仍走 tmp 单次合成,近不透明
+    local ax0, ay0, ax1, ay1 = inkBBox(0.5)
+    check(math.abs(ax0 - ox0) <= 2 and math.abs(ay0 - oy0) <= 2
+        and math.abs(ax1 - ox1) <= 2 and math.abs(ay1 - oy1) <= 2,
+        string.format("slash ink bbox: alpha0.99=(%d,%d,%d,%d) alpha0.5=(%d,%d,%d,%d)",
+            ox0, oy0, ox1, oy1, ax0, ay0, ax1, ay1))
+    -- 笔尖确实超出 0.5w pad(否则此测试测不到旧 bug)
+    check(150 - ox0 > 60 and ox1 - 150 > 60 and 150 - oy0 > 60 and oy1 - 150 > 60,
+        string.format("slash tip extends beyond 0.5w, got bbox (%d,%d,%d,%d)", ox0, oy0, ox1, oy1))
+end)
+
 -- 8. 透明度弹窗真实 paint(坑 14c:构造 OK 但 paint 崩的布局问题测不出来)
 section("alpha dialog real paint with blend row", function()
     local canvas = newCanvas()
