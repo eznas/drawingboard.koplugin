@@ -45,7 +45,7 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 ## 兼容性
 
-在 **Kindle**(2026 年近期 KOReader 版本)上开发并真机测试。插件只使用 KOReader 标准 API,运行时不依赖设备专属特性,理论上可在任何 KOReader 支持的设备上运行;其他设备(BOOX、Kobo、PocketBook、桌面端)暂未实测,欢迎反馈 issue。
+在 **Kindle PaperWhite 3** 与 **Kindle Voyage**(2026 年近期 KOReader 版本)上开发并真机测试。插件只使用 KOReader 标准 API,运行时不依赖设备专属特性,理论上可在任何 KOReader 支持的设备上运行;其他设备(BOOX、Kobo、PocketBook、桌面端)暂未实测,欢迎反馈 issue。
 
 ## 测试
 

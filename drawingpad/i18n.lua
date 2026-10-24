@@ -53,7 +53,7 @@ local M = {
         ["Choose save folder: "] = "选择保存文件夹: ",
         ["Max gray(0%=white 100%=black)"] = "最大灰度(0%=白 100%=黑)",
         ["Min gray(0%=white 100%=black)"] = "最小灰度(0%=白 100%=黑)",
-        ["Random levels(2-256)"] = "随机分级数(2-256)",
+        ["Random levels(2-64)"] = "随机分级数(2-64)",
         ["Fixed gray(0%=white 100%=black)"] = "固定灰度(0%=白 100%=黑)",
         ["Thickest(px)"] = "最粗(px)",
         ["Thinnest(px)"] = "最细(px)",

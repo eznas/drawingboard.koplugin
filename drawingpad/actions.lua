@@ -614,6 +614,10 @@ function M:_loadSettings()
             self[k] = v
         end
     end
+    -- v63b:旧设置里持久化的 "normal" 混合模式已从 UI 移除,矫正为默认 multiply
+    if self.alpha_blend == "normal" then
+        self.alpha_blend = "multiply"
+    end
     -- 文字内容(上次插入内容)单独存取:_last_text 字段带下划线,不进 SETTING_KEYS 通用循环。
     -- v57:补全 _last_font/_last_font_size,让"上次文字用的字体"跨重启保留(v52 只存了文字内容,
     -- 插入模式退到 self.font 工具栏字体而非上次文字字体——重启后用户体感字体变化)。

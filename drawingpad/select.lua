@@ -366,8 +366,10 @@ end
 -- 命中测试与锚点绘制共用同一组角点,保证"所见即所点"
 function M:_frameCorners(el)
     local pad = 4
+    local pen_r = (el.width or 2) / 2
     if el.kind == "circle" and (el.rot or 0) ~= 0 then
-        local rx, ry = el.rx or el.r, el.ry or el.rx or el.r
+        local rx = (el.rx or el.r) + pen_r
+        local ry = (el.ry or el.rx or el.r) + pen_r
         local c, s = math.cos(el.rot), math.sin(el.rot)
         -- 椭圆 OBB 四角 = 中心 ± rx·u ± ry·v(u/v 为旋转后的两轴)
         local pts = {
@@ -387,20 +389,21 @@ function M:_frameCorners(el)
         end
         return pts
     elseif el.kind == "poly" then
-        -- 旋转矩形转 poly:取其角点,绕质心外扩 pad
+        -- 旋转矩形转 poly:取其角点,绕质心外扩笔宽加 pad
         local pts = {}
         local cx, cy = 0, 0
         for i, p in ipairs(el.points) do
             pts[i] = { x = p.x, y = p.y }
-            cx, cy = cx + p.x, cy + p.y
+            cx = cx + p.x
+            cy = cy + p.y
         end
         cx, cy = cx / #pts, cy / #pts
         for _, p in ipairs(pts) do
             local dx, dy = p.x - cx, p.y - cy
             local len = math.sqrt(dx * dx + dy * dy)
             if len > 0.01 then
-                p.x = p.x + dx / len * pad
-                p.y = p.y + dy / len * pad
+                p.x = p.x + dx / len * (pen_r + pad)
+                p.y = p.y + dy / len * (pen_r + pad)
             end
         end
         return pts

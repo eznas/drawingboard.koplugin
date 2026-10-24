@@ -6,7 +6,7 @@
 4. 混合模式随元素持久:画布切回 normal 后区域重绘,旧元素仍按 multiply 复现;
    新元素按 normal 混合
 5. dodge:中灰 50% 叠在暗底上比 normal 提亮;黑墨 dodge 不改变底色
-6. 透明度设置弹窗含混合模式键,点击循环 正常→正片叠底→线性减淡→正常
+6. 透明度设置弹窗含混合模式键,点击两态切换 正片叠底⇄线性减淡(v63b 删 normal)
 7. const.SETTING_KEYS 含 alpha_blend(退出持久化)
 
 运行(从 KOReader 根目录):
@@ -186,20 +186,20 @@ section("blend persists per element across redraw", function()
     canvas:onPan(nil, { pos = { x = 100, y = 200 }, start_pos = { x = 100, y = 200 } })
     canvas:onPanRelease(nil, { pos = { x = 200, y = 300 } })
     local el = canvas.elements[1]
-    -- 切回 normal,整区域白刷重绘:multiply 元素必须按原样复现(白底上仍 ~128)
-    canvas.alpha_blend = "normal"
+    -- 切到 dodge,整区域白刷重绘:multiply 元素必须按原样复现(白底上仍 ~128)
+    canvas.alpha_blend = "dodge"
     local reg = canvas:_elementRegion(el)
     canvas:_redrawRegion(reg)
     local v = px(canvas.canvas_bb, 150, 250)
     check(math.abs(v - 128) <= 2, "multiply element reproduced after redraw, got " .. v)
-    -- 新元素 normal 模式中灰 50% 叠在其上:out = 0.5·128 + 0.5·128 = 128;
+    -- 新元素 dodge 模式中灰 50% 叠在其上:add=128+128→截断 255,out = 0.5·128+0.5·255 ≈ 192;
     -- 若错误沿用 multiply 会是 64
     canvas.gray = 0.5
     canvas:onPan(nil, { pos = { x = 130, y = 230 }, start_pos = { x = 130, y = 230 } })
     canvas:onPanRelease(nil, { pos = { x = 180, y = 280 } })
-    check(canvas.elements[2].blend == "normal", "new element uses current mode")
+    check(canvas.elements[2].blend == "dodge", "new element uses current mode")
     local v2 = px(canvas.canvas_bb, 155, 255)
-    check(math.abs(v2 - 128) <= 2, "normal midgray over 128 stays ~128, got " .. v2)
+    check(math.abs(v2 - 192) <= 2, "dodge midgray over 128 ~= 192, got " .. v2)
     canvas:onCloseWidget()
 end)
 
@@ -224,10 +224,10 @@ section("canvas dodge lightens over dark ink", function()
     canvas:onCloseWidget()
 end)
 
--- 6. 设置弹窗混合模式行:存在 + 循环切换
+-- 6. 设置弹窗混合模式行:存在 + 两态切换(v63b 删除 normal,正片叠底⇄线性减淡)
 section("alpha dialog blend mode row cycles", function()
     local canvas = newCanvas()
-    check(canvas.alpha_blend == "normal", "default blend is normal")
+    check(canvas.alpha_blend == "multiply", "default blend is multiply")
     local captured
     canvas._showCenteredButtons = function(_, title, btns, width)
         captured = btns
@@ -241,11 +241,9 @@ section("alpha dialog blend mode row cycles", function()
     local txt = mode_btn.text or ""
     check(txt:find("Blend") or txt:find("混合"), "blend button label, got " .. txt)
     mode_btn.callback()
-    check(canvas.alpha_blend == "multiply", "cycle 1 -> multiply, got " .. tostring(canvas.alpha_blend))
+    check(canvas.alpha_blend == "dodge", "toggle 1 -> dodge, got " .. tostring(canvas.alpha_blend))
     mode_btn.callback()
-    check(canvas.alpha_blend == "dodge", "cycle 2 -> dodge, got " .. tostring(canvas.alpha_blend))
-    mode_btn.callback()
-    check(canvas.alpha_blend == "normal", "cycle 3 -> normal, got " .. tostring(canvas.alpha_blend))
+    check(canvas.alpha_blend == "multiply", "toggle 2 -> multiply, got " .. tostring(canvas.alpha_blend))
     canvas:onCloseWidget()
 end)
 

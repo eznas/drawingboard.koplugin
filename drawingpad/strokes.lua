@@ -62,15 +62,13 @@ function M:_renderStrokeTail(s)
     -- 重叠反复应用 alpha)和整笔重放(平方增长)都废弃;收笔时 live_alpha 分支整笔
     -- 区域重放一次,把不透明预览修正成均匀半透明。
     -- 豁免 fill 工具无意义了:fill 描边同样走不透明预览,提交时本就整区重放擦掉
-    local pbb = self:_alphaBB(self.canvas_bb, s)
-    if type(pbb) == "table" and pbb.__dp_alpha and pbb.__dp_alpha < 255 then
-        pbb = self.canvas_bb
-        -- v62v:落笔前快照(只取一次)——收笔快路恢复快照+整笔单次合成
-        if not s._alpha_snap_done then
-            s._alpha_snap_done = true
-            self:_takeAlphaStrokeSnap()
-        end
+    local eff = ((s and s.alpha) or 1)
+        * ((self.layer_alpha and self.layer_alpha[self.active_layer]) or 1)
+    if eff < 0.999 and not s._alpha_snap_done then
+        s._alpha_snap_done = true
+        self:_takeAlphaStrokeSnap()
     end
+    local pbb = self.canvas_bb
     local minx, miny, maxx, maxy
     if not s._tip_drawn then
         -- 起点全宽笔触(按下即见;起笔即全宽,起笔处的小圆弧清晰可见)。
@@ -113,11 +111,7 @@ function M:_renderStrokeClose(s)
     local n = #pts
     if n < 2 then return nil end
     local gray = Blitbuffer.gray(s.gray)
-    local pbb = self:_alphaBB(self.canvas_bb, s)
-    -- v62s:半透明实时以不透明灰度预览(同 _renderStrokeTail)
-    if type(pbb) == "table" and pbb.__dp_alpha and pbb.__dp_alpha < 255 then
-        pbb = self.canvas_bb
-    end
+    local pbb = self.canvas_bb
     local minx, miny, maxx, maxy
     while (s._seg or 0) < n - 1 do
         local k = (s._seg or 0) + 1
@@ -319,14 +313,16 @@ function M:_finishStroke(x, y)
         -- 做一次单次合成(drawElement 拦截 → drawFilledAlpha)。旧路径走
         -- _redrawRegion:白刷+重放区域内全部元素(含背景填),元素多时收笔明显卡。
         -- 当前层之上还有可见图层时快路恢复不了遮挡关系,退回重放
-        local replay = true
+        local replay = false
         local snap = self._alpha_stroke_snap
         self._alpha_stroke_snap = nil
-        if snap then
+        if not snap then
+            replay = true
+        else
             local active = self.active_layer or 2
             for li = active + 1, 3 do
                 if self.layer_visible[li] and #self.layers[li] > 0 then
-                    replay = false
+                    replay = true
                     break
                 end
             end
@@ -1002,6 +998,7 @@ end
 -- 路径不作为元素提交;按自身几何(偶奇规则)算内部,不理会画布其他笔画;
 -- 退化(点数不足/共线)时清掉路径墨迹、不留任何东西。
 function M:_commitFillPath(s)
+    self:_freeAlphaStrokeSnap() -- fill 不消费快照:提交时立即释放,避免全屏 BB 常驻
     if not s or not s.points or #s.points < 3 then
         -- 退化路径:白刷已画的路径墨迹,不留路径也不留填充
         if s then

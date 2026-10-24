@@ -66,10 +66,10 @@ local DrawingCanvas = InputContainer:extend{
     alpha_max = 1.0,
     alpha_levels = 8,
     alpha_random = false,
-    -- 透明度混合模式(normal=正常/multiply=正片叠底/dodge=线性减淡):
+    -- 透明度混合模式(multiply=正片叠底/dodge=线性减淡;normal 已从 UI 移除,仅作旧元素兼容):
     -- 只作用于"新元素"(创建时记录进 el.blend,旧元素重绘不受影响);
     -- 透明度设置弹窗切换
-    alpha_blend = "normal",
+    alpha_blend = "multiply",
     tip = "circle",      -- 笔触形状(仅画笔/直线):circle/square/triangle/triangle_inv/diamond/slash/backslash
     save_folder = "",    -- 保存子文件夹(相对 drawingboard/ 根目录,""=根目录)
     -- 图层:3 层独立元素列表与撤销/重做栈;self.elements/undo/redo 指向当前层引用

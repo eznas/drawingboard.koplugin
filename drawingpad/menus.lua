@@ -1385,25 +1385,21 @@ function M:_pickAlpha()
     self:_showSettingDialog{
         title = "Opacity",
         ids = { "alpha_max_btn", "alpha_min_btn", "alpha_levels_btn", "alpha_fixed_btn", "alpha_blend_btn" },
-        -- 混合模式(仅影响新落笔元素的透明度叠加;点击循环切换)
+        -- 混合模式(仅影响新落笔元素的透明度叠加;点击两态切换,normal 仅作旧元素兼容已从 UI 移除)
         mode = {
             label = function(s)
-                local m = s.alpha_blend or "normal"
-                if m == "multiply" then
-                    return L.t("Blend:Multiply", "混合:正片叠底")
-                elseif m == "dodge" then
+                local m = s.alpha_blend or "multiply"
+                if m == "dodge" then
                     return L.t("Blend:Dodge", "混合:线性减淡")
                 end
-                return L.t("Blend:Normal", "混合:正常")
+                return L.t("Blend:Multiply", "混合:正片叠底")
             end,
             cycle = function(s)
-                local m = s.alpha_blend or "normal"
-                if m == "normal" then
+                local m = s.alpha_blend or "multiply"
+                if m == "dodge" then
                     s.alpha_blend = "multiply"
-                elseif m == "multiply" then
-                    s.alpha_blend = "dodge"
                 else
-                    s.alpha_blend = "normal"
+                    s.alpha_blend = "dodge"
                 end
                 s:_log("alpha blend ->", s.alpha_blend)
             end,

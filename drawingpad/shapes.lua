@@ -246,16 +246,20 @@ function shapes.crSegment(bb, p0, p1, p2, p3, width, color, tip)
     local steps = math.max(2, math.min(64, math.floor(approx / 2)))
     local px = math.floor(p1.x)
     local py = math.floor(p1.y)
+    local cx0 = 2 * p1.x
+    local cx1 = -p0.x + p2.x
+    local cx2 = 2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x
+    local cx3 = -p0.x + 3 * p1.x - 3 * p2.x + p3.x
+    local cy0 = 2 * p1.y
+    local cy1 = -p0.y + p2.y
+    local cy2 = 2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y
+    local cy3 = -p0.y + 3 * p1.y - 3 * p2.y + p3.y
     for i = 1, steps do
         local t = i / steps
         local t2 = t * t
         local t3 = t2 * t
-        local qx = math.floor(0.5 * (2 * p1.x + (-p0.x + p2.x) * t
-            + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
-            + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3))
-        local qy = math.floor(0.5 * (2 * p1.y + (-p0.y + p2.y) * t
-            + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
-            + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3))
+        local qx = math.floor(0.5 * (cx0 + cx1 * t + cx2 * t2 + cx3 * t3))
+        local qy = math.floor(0.5 * (cy0 + cy1 * t + cy2 * t2 + cy3 * t3))
         if qx ~= px or qy ~= py then
             shapes.thickLine(bb, px, py, qx, qy, width, color, tip)
             px, py = qx, qy
@@ -279,17 +283,30 @@ function shapes.polyline(bb, points, width, color, ox, oy, tip)
     end
     -- 起点笔触(全宽:起笔即全宽,起笔处的小圆弧清晰可见)
     shapes.tip(bb, points[1].x + ox, points[1].y + oy, width, color, tip)
-    for i = 1, n - 1 do
-        local p0 = points[math.max(1, i - 1)]
-        local p1 = points[i]
-        local p2 = points[i + 1]
-        local p3 = points[math.min(n, i + 2)]
-        shapes.crSegment(bb,
-            { x = p0.x + ox, y = p0.y + oy },
-            { x = p1.x + ox, y = p1.y + oy },
-            { x = p2.x + ox, y = p2.y + oy },
-            { x = p3.x + ox, y = p3.y + oy },
-            width, color, tip)
+    if ox == 0 and oy == 0 then
+        for i = 1, n - 1 do
+            local p0 = points[math.max(1, i - 1)]
+            local p1 = points[i]
+            local p2 = points[i + 1]
+            local p3 = points[math.min(n, i + 2)]
+            shapes.crSegment(bb, p0, p1, p2, p3, width, color, tip)
+        end
+    else
+        local p0o = { x = 0, y = 0 }
+        local p1o = { x = 0, y = 0 }
+        local p2o = { x = 0, y = 0 }
+        local p3o = { x = 0, y = 0 }
+        for i = 1, n - 1 do
+            local p0 = points[math.max(1, i - 1)]
+            local p1 = points[i]
+            local p2 = points[i + 1]
+            local p3 = points[math.min(n, i + 2)]
+            p0o.x, p0o.y = p0.x + ox, p0.y + oy
+            p1o.x, p1o.y = p1.x + ox, p1.y + oy
+            p2o.x, p2o.y = p2.x + ox, p2.y + oy
+            p3o.x, p3o.y = p3.x + ox, p3.y + oy
+            shapes.crSegment(bb, p0o, p1o, p2o, p3o, width, color, tip)
+        end
     end
 end
 
@@ -603,7 +620,8 @@ end
 -- ponytail: 逐像素 Lua setter,整幅大填充约 0.1s 级(仅提交/重绘时一次);不够快再换 getPixelP 指针循环
 -- 混合模式(灰度画布,ink=墨色灰度 0 黑~255 白,d=目标像素,a255=不透明度 0-255):
 --   normal   直通 alpha: out = d + a·(ink-d)(原生 setPixelBlend,不读 dest)
---   multiply 正片叠底: out = (1-a)·d + a·ink·d/255 —— 墨与下层相乘,叠墨越叠越深
+--            v63b 起已从 UI 移除,仅作旧元素(el.blend=nil 或 "normal")兼容路径保留
+--   multiply 正片叠底: out = (1-a)·d + a·ink·d/255 —— 墨与下层相乘,叠墨越叠越深(新默认)
 --   dodge    线性减淡: out = (1-a)·d + a·min(255, ink+d) —— 加色提亮,深墨近乎不变
 -- multiply/dodge 必须读 dest,只能逐像素 Lua(blendModePixel);调用方须保证 bb 是
 -- BB8 画布/区域临时 BB(_alphaBB 已做类型守卫,屏幕预览 BB 回退不透明/normal)
@@ -787,11 +805,10 @@ function shapes.drawFilledAlpha(bb, el, color, ox, oy)
         local rbase = ffi.cast("uint8_t*", real.data)
         for ty = 0, y1 - y0 do
             local trow = tbase + tmp.stride * ty
-            local rrow = rbase + real.stride * (ty + y0)
+            local rrow = rbase + real.stride * (ty + y0) + x0
             for tx = 0, x1 - x0 do
                 if trow[tx] ~= 255 then
-                    local rx = tx + x0
-                    rrow[rx] = lut[rrow[rx]]
+                    rrow[tx] = lut[rrow[tx]]
                 end
             end
         end

@@ -45,7 +45,7 @@ A grayscale artwork drawn with the drawing board:
 
 ## Compatibility
 
-Developed and tested on **Kindle** running recent KOReader releases (2026). The plugin uses only standard KOReader APIs and no device-specific features at runtime, so it should work wherever KOReader runs — but other devices (BOOX, Kobo, PocketBook, desktop) are untested so far. Issue reports from other platforms are welcome.
+Developed and tested on **Kindle PaperWhite 3** and **Kindle Voyage** running recent KOReader releases (2026). The plugin uses only standard KOReader APIs and no device-specific features at runtime, so it should work wherever KOReader runs — but other devices (BOOX, Kobo, PocketBook, desktop) are untested so far. Issue reports from other platforms are welcome.
 
 ## Self-tests
 
