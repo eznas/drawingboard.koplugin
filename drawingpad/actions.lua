@@ -390,6 +390,23 @@ end
 
 -- 序列化并写入 .drawing 文件(同步小文本写盘,pcall 防权限/SD 忙)
 function M:_doSaveProject(path)
+    -- 图片元素(v65):src=原图直链,rot/窗口/sfx/sfy 元数据随元素序列化,
+    -- 重开时从原图重建像素——保存不写任何像素文件。
+    -- 仅"不可重建"元素(旧格式旋转图/烧平后,_orig 缺失)仍落盘像素副本,
+    -- 且不写 sfx(下次加载仍走旧格式路径,避免对已含旋转的 src 二次旋转)
+    for li = 1, 3 do
+        for _, el in ipairs(self.layers[li]) do
+            if el.kind == "image" then
+                if el._orig then
+                    el.sfx = el._sfx or 1
+                    el.sfy = el._sfy or 1
+                else
+                    el.sfx, el.sfy = nil, nil
+                    self:_persistImage(el)
+                end
+            end
+        end
+    end
     local data = {
         version = 1,
         active_layer = self.active_layer,
@@ -551,6 +568,10 @@ function M:_loadProject(path)
         for _, el in ipairs(data.layers[li] or {}) do
             if type(el) == "table" and type(el.kind) == "string" then
                 el._bbox = nil -- 私有字段不序列化,载入后重算
+                if el.kind == "image" then
+                    -- 图片像素经副本文件重载(v64;失败保留元素但渲染跳过)
+                    self:_reloadImageBB(el)
+                end
                 table.insert(els, el)
                 self:_cacheBBox(el)
             end
@@ -694,8 +715,45 @@ function M:onClose()
 end
 
 -- 关闭时释放画布 BlitBuffer(用 pcall 保护,防止关闭流程中崩溃)
+-- 作画活动喂狗(v64d):画板内任何手势/入口回调都会走到这里(wrapHandler 统一调)。
+-- ①standby 保持:UIManager:preventStandby() 引用计数,最后一次活动后
+--   STANDBY_HOLD_SECONDS(60s)内不进系统待机——KOReader 默认 4s 无输入即 standby,
+--   作画停顿一超就待机,唤醒吞掉第一笔="作画时屏幕不反应";过期由下一次手势
+--   惰性释放(不开定时器任务,零 _invalidateTasks/稳定性测试干扰)
+-- ②自动挂起计时:节流执行 UIManager 的 "InputEvent" 钩子(AutoSuspend 插件注册处,
+--   等价"刚有输入"→ 刷新 last_action_time;UIManager 本身每输入批也会执行,这里是
+--   兜底),30s 节流
+function M:_noteActivity()
+    self:_releaseStandbyIfExpired()
+    local now = os.time()
+    if not self._standby_held then
+        UIManager:preventStandby()
+        self._standby_held = true
+    end
+    self._activity_until = now + const.STANDBY_HOLD_SECONDS
+    if not self._last_hook_refresh or (now - self._last_hook_refresh) >= 30 then
+        self._last_hook_refresh = now
+        pcall(function()
+            UIManager.event_hook:execute("InputEvent")
+        end)
+    end
+end
+
+-- 活动过期则释放 standby 保持(引用计数配对,allowStandby 断言 count>0 由标志守护)
+function M:_releaseStandbyIfExpired()
+    if self._standby_held and os.time() > (self._activity_until or 0) then
+        UIManager:allowStandby()
+        self._standby_held = false
+    end
+end
+
 function M:onCloseWidget()
     local ok, err = pcall(function()
+        -- 释放作画活动的 standby 保持(若持有;引用计数配对)
+        if self._standby_held then
+            self._standby_held = false
+            pcall(UIManager.allowStandby, UIManager)
+        end
         -- 关闭仍打开的分类面板(退出按钮/物理 Back 等 close 路径都经这里,
         -- 否则面板残留在窗口栈里,画板关了菜单还挂在屏幕上)
         if self._category_popup then

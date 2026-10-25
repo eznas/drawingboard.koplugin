@@ -48,10 +48,16 @@ function M:onTap(_, ges)
                 self:_commitDot(x, y)
                 committed = true
             elseif self.tool == "select" then
-                -- 点选/取消选中;再次点选已选中对象:切换 缩放/旋转 锚点
+                -- 点选/取消选中;再次点选已选中对象:切换锚点模式
+                -- (图片:缩放⇄裁剪;其余:缩放⇄旋转)
                 local el = self:_pickElementAt(x, y)
                 if el and el == self._selected then
-                    self._handle_mode = (self._handle_mode == "rotate") and "scale" or "rotate"
+                    if el.kind == "image" then
+                        -- 三态循环:缩放→裁剪→旋转(v64f)
+                        self._handle_mode = ({ scale = "crop", crop = "rotate", rotate = "scale" })[self._handle_mode] or "scale"
+                    else
+                        self._handle_mode = (self._handle_mode == "rotate") and "scale" or "rotate"
+                    end
                     UIManager:setDirty(self, "partial", self:_handleRegion(el))
                 else
                     self:_setSelected(el)
@@ -169,8 +175,25 @@ function M:onPan(_, ges)
                         orig = self:_cloneElement(el),
                     }
                 else
-                    self._select_drag = { x0 = sx, y0 = sy }
+                    -- 裁剪模式 + 图片(v64s/v64t):拖动=平移窗口,裁剪框相对
+                    -- 画布固定(不限起点在框内——框外起拖同样只平移窗口,
+                    -- 框不跟手);移动整个对象请切缩放模式
+                    local el = self._selected
+                    if el.kind == "image" and self._handle_mode == "crop" then
+                        self:_normalizeImageWindow(el)
+                        self._crop_pan = { x0 = sx, y0 = sy,
+                            cx0 = el.cx0, cy0 = el.cy0,
+                            orig = self:_cloneElement(el) }
+                    else
+                        self._select_drag = { x0 = sx, y0 = sy }
+                    end
                 end
+            end
+        elseif self._crop_pan then
+            -- 裁剪窗口平移(v64s):内容实时跟手,框固定
+            local x, y = self:_toCanvas(ges.pos.x, ges.pos.y)
+            if x then
+                self:_updateImageCropPan(x, y)
             end
         elseif self._select_drag and not self._transform then
             -- 拖动中:更新 0.5s 停留落点预览(停止防抖,显示后跟随手指实时更新)
@@ -182,7 +205,13 @@ function M:onPan(_, ges)
             -- 拖锚点变形(旋转/缩放):停满 0.5s 显示预览,随后跟随手指实时更新(节流防抖)
             local x, y = self:_toCanvas(ges.pos.x, ges.pos.y)
             if x then
-                self:_scheduleDragPreview(x, y)
+                if self._selected and self._selected.kind == "image" then
+                    -- 图片缩放/裁剪(v64):轻量线框预览(无内容重采样,
+                    -- 不走 0.2s 停止防抖——框即时的,真机不卡)
+                    self:_scheduleImageFramePreview(x, y)
+                else
+                    self:_scheduleDragPreview(x, y)
+                end
             end
         end
     end
@@ -267,6 +296,28 @@ function M:onPanRelease(_, ges)
         end
         self:_finishTransform(x, y)
         committed = true
+    elseif self._crop_pan then
+        -- 裁剪窗口平移收笔(v64s):先应用收笔点位移(无中间 move 事件也生效),
+        -- 位置变了才压撤销
+        local el = self._selected
+        local pan = self._crop_pan
+        self._crop_pan = nil
+        if el and el.kind == "image" and pan.orig then
+            if ges and ges.pos then
+                local x, y = self:_toCanvas(ges.pos.x, ges.pos.y)
+                if x then
+                    self._crop_pan = pan
+                    self:_updateImageCropPan(x, y)
+                    self._crop_pan = nil
+                end
+            end
+            if (el.cx0 or 0) ~= (pan.orig.cx0 or 0) or (el.cy0 or 0) ~= (pan.orig.cy0 or 0) then
+                self:_pushUndo({ kind = "transform", el = el, orig = pan.orig,
+                    final = self:_cloneElement(el) })
+                self:_clearRedo()
+            end
+        end
+        committed = true
     elseif self._select_drag then
         -- 选择工具:松手按 终点-起点 位移 移动/复制 选中对象
         local x, y
@@ -301,8 +352,18 @@ function M:onTwoFingerPan()
     return true
 end
 
-function M:onPinch()
+-- 双指捏合/张开(v64c):图片对象上=绕中心等比缩放(span/start_span),
+-- 其余场景仅收笔(与旧 onPinch 行为一致)
+function M:onPinch(_, ges)
     self:_finishStroke(nil)
+    self:_pinchScaleImage(ges)
+    self:_penUpRefresh()
+    return true
+end
+
+function M:onSpread(_, ges)
+    self:_finishStroke(nil)
+    self:_pinchScaleImage(ges)
     self:_penUpRefresh()
     return true
 end
@@ -317,12 +378,16 @@ function M:onSwipe(_, ges)
     -- 上一手势可能以 swipe 收尾(pan_release 未触发):图形/橡皮清理遗留锚点,
     -- 画笔的进行中笔画在下方按终点收笔(不丢弃、不连笔)
     local pending = self._stroke_pending -- 先捕获:防抖期微轨迹在下方画笔分支复用
+    -- 锚点变形被 swipe 收笔(v65):快速拖动锚点会被 KOReader 归类成 swipe,
+    -- 先捕获进行中的变形再清理——否则旋转/缩放丢失、元素被整段拖走(用户实证)
+    local swipe_tr = self._transform
     self:_invalidateTasks()
     self._shape_start = nil
     self._erase_path = nil
     self._stroke_pending = nil
     self._select_drag = nil
     self._transform = nil
+    self._crop_pan = nil -- swipe 收尾吞掉 pan_release:清理平移状态防残留(v64t)
     self:_cancelShapePreview()
     self._shape_preview_region = nil
     self._shape_pos = nil
@@ -415,8 +480,53 @@ function M:onSwipe(_, ges)
             committed = true
         end
     elseif tool == "select" then
-        -- 选择工具快速拖动:按 起点→终点 位移 移动/复制 选中对象
-        self:_applySelectDelta(math.floor(x - sx + 0.5), math.floor(y - sy + 0.5))
+        -- 选择工具快速拖动:按 起点→终点 位移 移动/复制 选中对象。
+        -- 锚点变形收笔(v65):变形已随 pan 启动(swipe_tr)或 swipe 起点命中锚点
+        -- 时,恢复 _transform 走与 pan_release 完全相同的提交路径(_finishTransform
+        -- 含预览清理/撤销/ui 波形)——修"旋转模式快速拖动锚点旋转失败"。
+        -- 裁剪模式 + 图片(v64t):swipe 与 pan 同语义=平移窗口——快速滑动被
+        -- KOReader 归类成 swipe 时若仍移动对象,框会"偶发"跟手跑(用户实证)
+        local el = self._selected
+        if not swipe_tr and el then
+            local handle = self:_hitHandle(sx, sy)
+            if handle then
+                local b = el._bbox or self:_elementBBox(el)
+                swipe_tr = {
+                    handle = handle,
+                    x0 = sx, y0 = sy,
+                    bbox = { x0 = b.x0, y0 = b.y0, x1 = b.x1, y1 = b.y1 },
+                    old_region = self:_elementRegion(el),
+                    orig = self:_cloneElement(el),
+                }
+            end
+        end
+        if swipe_tr and el then
+            self._transform = swipe_tr
+            self:_finishTransform(x, y)
+        elseif el and el.kind == "image" and self._handle_mode == "crop" then
+            self:_normalizeImageWindow(el)
+            local px, py = self:_toCanvas(sx, sy)
+            local tx, ty = self:_toCanvas(x, y)
+            if px and tx then
+                local orig = self:_cloneElement(el)
+                local dx, dy = tx - px, ty - py
+                local rot = el.rot or 0
+                local c, s = math.cos(rot), math.sin(rot)
+                el.cx0 = math.max(0, math.min(el.cx0 - (c * dx + s * dy), el.cw - el.cww))
+                el.cy0 = math.max(0, math.min(el.cy0 - (-s * dx + c * dy), el.ch - el.cwh))
+                self:_rebuildImageDisplay(el)
+                local region = self:_elementRegion(el)
+                self:_redrawRegion(region)
+                UIManager:setDirty(self, "partial", region)
+                if (el.cx0 or 0) ~= (orig.cx0 or 0) or (el.cy0 or 0) ~= (orig.cy0 or 0) then
+                    self:_pushUndo({ kind = "transform", el = el, orig = orig,
+                        final = self:_cloneElement(el) })
+                    self:_clearRedo()
+                end
+            end
+        else
+            self:_applySelectDelta(math.floor(x - sx + 0.5), math.floor(y - sy + 0.5))
+        end
         committed = true
     end
     if committed then

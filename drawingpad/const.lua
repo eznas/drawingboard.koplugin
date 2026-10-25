@@ -78,6 +78,17 @@ local STROKE_DEBOUNCE_DIST = 1
 -- (随笔宽放大:粗笔误触的尺寸阈值更大)
 local SHAPE_MIN_SIZE = 8
 
+-- 图片导入(v64):PNG 单边像素上限(IHDR 预检拒绝——renderImageFile 先全尺寸解码
+-- 再缩放,峰值≈RGBA 全图,512MB 无 swap 设备必须前置护栏)与导入适配比例
+-- (缩到画布该比例内,保纵横比)
+local IMAGE_MAX_DIM = 2500
+local IMAGE_FIT_RATIO = 0.9
+
+-- 作画活动保持(v64d):画板内任何手势后,该时长(秒)内不进系统待机(standby)。
+-- KOReader 默认 4s 无输入即 standby,作画停顿(思考/看画面)一超就待机,
+-- 唤醒会吞掉第一笔=屏幕无反应;活动后惰性释放(见 actions._noteActivity)
+local STANDBY_HOLD_SECONDS = 60
+
 -- 撤销栈上限:超过后丢弃最旧记录,防止长时间绘画内存无限增长
 local UNDO_LIMIT = 100
 
@@ -95,7 +106,7 @@ local SETTING_KEYS = {
     "width", "width_min", "width_max", "width_levels", "width_random",
     "alpha", "alpha_min", "alpha_max", "alpha_levels", "alpha_random",
     "alpha_blend",
-    "tip", "save_folder",
+    "tip", "save_folder", "import_folder",
     "font", "font_size",
     "menu_lang",
 }
@@ -118,7 +129,7 @@ local TOOL_NAMES = {
 local LAYER_COUNT = 3
 
 -- 插件版本与作者(关于弹窗;版本与 GitHub eznas/drawingboard.koplugin 保持一致或更高)
-local PLUGIN_VERSION = "v63b"
+local PLUGIN_VERSION = "v65c"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);
@@ -212,6 +223,9 @@ return {
     GESTURE_PAN_THRESHOLD_DP = GESTURE_PAN_THRESHOLD_DP,
     GESTURE_HOLD_INTERVAL_MS = GESTURE_HOLD_INTERVAL_MS,
     SHAPE_MIN_SIZE = SHAPE_MIN_SIZE,
+    IMAGE_MAX_DIM = IMAGE_MAX_DIM,
+    IMAGE_FIT_RATIO = IMAGE_FIT_RATIO,
+    STANDBY_HOLD_SECONDS = STANDBY_HOLD_SECONDS,
     UNDO_LIMIT = UNDO_LIMIT,
     MAX_STROKE_POINTS = MAX_STROKE_POINTS,
     LAYER_COUNT = LAYER_COUNT,

@@ -215,8 +215,11 @@ function shapes.thickLineFill(bb, x0, y0, x1, y1, width, color)
 end
 
 -- 粗线段:circle 走扫描线条带填充(边缘平滑);非圆笔触沿线段按间距 ~width/2 采样笔触
--- 形状(保持形状可辨又连续)。tip 缺省 = circle,向后兼容
-function shapes.thickLine(bb, x0, y0, x1, y1, width, color, tip)
+-- 形状(保持形状可辨又连续)。tip 缺省 = circle,向后兼容。
+-- micro=true(v63c):来自 crSegment 的 ~2px 微段,只盖起点笔触、跳过终点笔触——
+-- 下一微段的起点即本段终点,覆盖不变;避免每个微段两端各盖一次全尺寸笔尖
+-- (粗笔快速画时每事件上万次 paintRect 的一半是这种重复盖章)
+function shapes.thickLine(bb, x0, y0, x1, y1, width, color, tip, micro)
     width = width or 4
     local dx, dy = x1 - x0, y1 - y0
     local dist = math.sqrt(dx * dx + dy * dy)
@@ -227,7 +230,8 @@ function shapes.thickLine(bb, x0, y0, x1, y1, width, color, tip)
     if tip ~= nil and tip ~= "circle" then
         local step = math.max(2, math.floor(width / 2))
         local n = math.max(1, math.ceil(dist / step))
-        for i = 0, n do
+        local last_i = micro and n - 1 or n
+        for i = 0, last_i do
             local t = i / n
             shapes.tip(bb, x0 + dx * t, y0 + dy * t, width, color, tip)
         end
@@ -261,7 +265,7 @@ function shapes.crSegment(bb, p0, p1, p2, p3, width, color, tip)
         local qx = math.floor(0.5 * (cx0 + cx1 * t + cx2 * t2 + cx3 * t3))
         local qy = math.floor(0.5 * (cy0 + cy1 * t + cy2 * t2 + cy3 * t3))
         if qx ~= px or qy ~= py then
-            shapes.thickLine(bb, px, py, qx, qy, width, color, tip)
+            shapes.thickLine(bb, px, py, qx, qy, width, color, tip, true)
             px, py = qx, qy
         end
     end
@@ -307,6 +311,11 @@ function shapes.polyline(bb, points, width, color, ox, oy, tip)
             p3o.x, p3o.y = p3.x + ox, p3.y + oy
             shapes.crSegment(bb, p0o, p1o, p2o, p3o, width, color, tip)
         end
+    end
+    -- 微段模式跳过了各段终点盖章(下一微段起点即该处),整笔终点须显式补一次;
+    -- circle 笔触的终点圆头由 thickLineFill 端盖覆盖,无需额外盖章
+    if tip ~= nil and tip ~= "circle" then
+        shapes.tip(bb, points[n].x + ox, points[n].y + oy, width, color, tip)
     end
 end
 
@@ -646,7 +655,12 @@ end
 -- 混合模式快路(v63b):对固定 (ink, a255, mode),out 只依赖 dest 字节(0-255)
 -- → 预计算 256 项查找表(uint8 数组),混合循环每像素零 FFI 函数调用。
 -- 表达式与 blendModePixel 逐项一致(乘除顺序不变,浮点同点),有 256 全值断言
-function shapes.buildBlendLUT(mode, ink, a255)
+-- v63c:模块级缓存——区域重放时每个半透明元素都会重建同参数 LUT(每元素一次
+-- 256 循环浮点),纯浪费;缓存只读共享(调用方从不写 lut)。上限 64 条,满则
+-- 整表清空重建(防随机灰度/透明度组合无限增长)。
+local _blendLUTCache = {}
+local _blendLUTCacheN = 0
+local function buildBlendLUTImpl(mode, ink, a255)
     local ffi = require("ffi")
     local lut = ffi.new("uint8_t[256]")
     local na = 255 - a255
@@ -671,6 +685,22 @@ function shapes.buildBlendLUT(mode, ink, a255)
             lut[d] = out
         end
     end
+    return lut
+end
+function shapes.buildBlendLUT(mode, ink, a255)
+    -- mode 可为 nil(alphaProxy 无参构造),按 normal 处理(与 impl 的 else 分支一致)
+    local key = (mode or "normal") .. ":" .. ink .. ":" .. a255
+    local lut = _blendLUTCache[key]
+    if lut then
+        return lut
+    end
+    lut = buildBlendLUTImpl(mode, ink, a255)
+    if _blendLUTCacheN >= 64 then
+        _blendLUTCache = {}
+        _blendLUTCacheN = 0
+    end
+    _blendLUTCache[key] = lut
+    _blendLUTCacheN = _blendLUTCacheN + 1
     return lut
 end
 
@@ -720,8 +750,17 @@ function shapes.alphaProxy(real, alpha, mode)
                 if Y0 < 0 then Y0 = 0 end
                 if X1 > rw - 1 then X1 = rw - 1 end
                 if Y1 > rh - 1 then Y1 = rh - 1 end
+                -- v63c:cast/require 提出行循环(原 blendRowLUT 每行一次 cast+require,
+                -- 大区域行混合纯浪费);像素循环与 blendRowLUT/drawFilledAlpha 同款零 FFI 调用
+                local ffi = require("ffi")
+                local base = ffi.cast("uint8_t*", real.data)
+                local stride = real.stride
                 for yy = Y0, Y1 do
-                    shapes.blendRowLUT(real, X0, X1, yy, lut)
+                    local row = base + stride * yy
+                    for xx = X0, X1 do
+                        local pv = row[xx]
+                        row[xx] = lut[pv]
+                    end
                 end
             else
                 real:paintRect(x, y, w, h, Blitbuffer.Color8A(v.a, a255), blend_setter)
@@ -864,6 +903,41 @@ function shapes.drawElement(bb, el, color, ox, oy)
                 if xb > bw - 1 then xb = bw - 1 end
                 if xb >= xa then
                     bb:paintRect(xa, yy, xb - xa + 1, 1, color)
+                end
+            end
+        end
+    elseif kind == "image" then
+        -- 图片对象(v64l base 空间窗口):rot=0 走快路径——_bb 轴对齐子窗 blit
+        -- (cx0/cy0/cww/cwh 为 base 窗口,零重采样);rot≠0 渲染提交点预建的
+        -- _disp 显示缓存(窗口 R(rot) 后的外包,内容=倾斜窗口区域行拷贝)。
+        -- 半透明代理(alphaProxy)只拦 paintRect——图片恒不透明直画,代理时取真 bb
+        if el._bb then
+            local target = bb
+            if type(target) == "table" and target.__dp_real then
+                target = target.__dp_real
+            end
+            if (el.rot or 0) ~= 0 and el._disp then
+                -- v64v:只画窗口四边形的行跨度——旋转图 AABB 四角不落画布,
+                -- 对背景的遮挡不超出(倾斜)对象框;跨度表在 _disp 重建时缓存
+                if el._disp_spans then
+                    local dx, dy = el.x + (ox or 0), el.y + (oy or 0)
+                    for y, sp in pairs(el._disp_spans) do
+                        target:blitFrom(el._disp, dx + sp[1], dy + y - 1,
+                            sp[1], y - 1, sp[2] - sp[1], 1)
+                    end
+                else
+                    target:blitFrom(el._disp, el.x + (ox or 0), el.y + (oy or 0))
+                end
+            else
+                -- base 窗口字段为浮点(缩放不取整防漂移),blit 前取整
+                local bbw, bbh = el._bb:getWidth(), el._bb:getHeight()
+                local cx0 = math.floor(math.max(0, math.min(el.cx0 or 0, bbw - 1)) + 0.5)
+                local cy0 = math.floor(math.max(0, math.min(el.cy0 or 0, bbh - 1)) + 0.5)
+                local w = math.floor(math.min(el.cww or el.w, bbw - cx0) + 0.5)
+                local h = math.floor(math.min(el.cwh or el.h, bbh - cy0) + 0.5)
+                if w > 0 and h > 0 then
+                    target:blitFrom(el._bb, el.x + (ox or 0), el.y + (oy or 0),
+                        cx0, cy0, w, h)
                 end
             end
         end

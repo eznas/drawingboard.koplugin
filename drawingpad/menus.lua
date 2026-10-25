@@ -391,6 +391,11 @@ local TOGGLE_BUTTONS = {
     -- v62e 排序(左→右,上→下):撤销 重做 / 清空 打开 / 输出 保存 / 关于 退出
     { id = "open_proj_btn", cat = "func", label = "Open", close_on_tap = true,
       on_tap = function(s) s:_openProject() end },
+    -- v64:导入 PNG 图片作为对象(缩放/裁剪/移动;导入即选中)
+    { id = "import_img_btn", cat = "func",
+      text_fn = function(s) return L.t("Import image", "导入图片") end,
+      close_on_tap = true,
+      on_tap = function(s) s:_importImage() end },
     { id = "save_btn",  cat = "func", label = "Export", close_on_tap = true,
       on_tap = function(s) s:_save() end },
     { id = "save_proj_btn", cat = "func", label = "Save", close_on_tap = true,
@@ -1282,6 +1287,11 @@ function M:_pickElementGray()
     if not el then
         return
     end
+    if el.kind == "image" then
+        -- 图片像素自带灰阶,无元素级灰度
+        components.showToast("This object has no gray scale.", 2)
+        return
+    end
     local pending_orig = nil
     self:_showValuePicker{
         title = "Selected gray(0%=white 100%=black)",
@@ -1309,13 +1319,13 @@ function M:_pickElementGray()
     }
 end
 
--- 选中对象线宽调节(文字/填充无线宽,提示后跳过)
+-- 选中对象线宽调节(文字/填充/图片无线宽,提示后跳过)
 function M:_pickElementWidth()
     local el = self._selected
     if not el then
         return
     end
-    if el.kind == "text" or el.kind == "fill" then
+    if el.kind == "text" or el.kind == "fill" or el.kind == "image" then
         components.showToast("This object has no line width.", 2)
         return
     end
@@ -1440,6 +1450,11 @@ function M:_pickElementAlpha()
     if not el then
         return
     end
+    if el.kind == "image" then
+        -- 图片 blitFrom 不参与 alpha 混合,元素级透明度第一版不支持
+        components.showToast("This object has no opacity.", 2)
+        return
+    end
     local pending_orig = nil
     self:_showValuePicker{
         title = "Selected opacity(100%=opaque)",
@@ -1546,13 +1561,19 @@ end
 -- 根目录=drawingboard 时 save_folder 存 "" 保持默认
 -- file_ext(可选,默认 "%.png$")=列出的文件扩展名匹配(打开工程时传 "%.drawing$");
 -- title_prefix(可选)=弹窗标题前缀(默认"选择保存文件夹: ")
-function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix)
+-- start_dir(可选,v64)=起始目录(导入图片记住的上次目录);不存在回退根目录
+function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix, start_dir)
     file_ext = file_ext or "%.png$"
     title_prefix = title_prefix or L.t("Choose save folder: ", "选择保存文件夹: ")
     local lfs = require("libs/libkoreader-lfs")
     local base = DataStorage:getDataDir() .. "/drawingboard"
     if lfs.attributes(base, "mode") ~= "directory" then
         pcall(lfs.mkdir, base)
+    end
+    local cur = base
+    if start_dir and start_dir ~= "" and start_dir ~= base
+        and lfs.attributes(start_dir, "mode") == "directory" then
+        cur = start_dir
     end
     local ButtonDialog = require("ui/widget/buttondialog")
     local dialog = nil

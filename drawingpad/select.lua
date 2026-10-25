@@ -211,37 +211,15 @@ end
 
 -- 预览已显示后:跟随手指更新预览元素,区域并入累积区,节流重绘。
 -- bbox 与当前预览一致(几何未变,如微动/圆旋转)则跳过,不重复刷新=防闪烁、省波形。
--- 旋转预览额外按角度节流重建:每次 pan 全量重栅格化(大 fill 数毫秒到数百毫秒)是
--- 拖拽卡断主因,角度变化小于 DRAG_ROTATE_RECALC_ANGLE 直接跳过(只更新落点位置)
+-- v63c:pan 只记录最新落点,克隆+变形重建移进 0.06s 节流 flush——重建与刷屏
+-- 同一节奏(视觉无差异),而按原始事件率(50-100Hz)做全量重建(fill 元素重
+-- 栅格化/4096 点深拷贝)是拖拽卡顿主因。旋转角度节流(DRAG_ROTATE_RECALC_ANGLE)
+-- 保留,移入 flush 内判定
 function M:_updateDragPreview(x, y)
     self._drag_preview_pos = { x = x, y = y }
     if not self._drag_preview then
         return
     end
-    local tr = self._transform
-    if tr and self._handle_mode == "rotate" then
-        local sb = tr.bbox
-        local cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
-        local a = math.atan2(y - cy, x - cx)
-        local last = self._drag_preview_angle
-        if last and math.abs(a - last) < const.DRAG_ROTATE_RECALC_ANGLE then
-            return -- 角度几乎未变:跳过重建与重绘
-        end
-        self._drag_preview_angle = a
-    end
-    local pv = self:_buildDragPreview(x, y)
-    if not pv then
-        return
-    end
-    self:_cacheBBox(pv)
-    local cur = self._drag_preview
-    if cur._bbox and pv._bbox
-        and cur._bbox.x0 == pv._bbox.x0 and cur._bbox.y0 == pv._bbox.y0
-        and cur._bbox.x1 == pv._bbox.x1 and cur._bbox.y1 == pv._bbox.y1 then
-        return -- 可见结果未变,不重绘
-    end
-    self._drag_preview = pv
-    self._drag_preview_region = self:_mergeRegions(self._drag_preview_region, self:_elementRegion(pv))
     if not self._drag_preview_repaint_pending then
         self._drag_preview_repaint_pending = true
         local fn = function()
@@ -252,7 +230,7 @@ function M:_updateDragPreview(x, y)
     end
 end
 
--- 预览跟随节流窗口到点:合并累积区域刷新
+-- 预览跟随节流窗口到点:重建预览(角度守卫+bbox 去重)+合并累积区域刷新
 function M:_flushDragPreviewRepaint()
     if self._drag_preview_repaint_fn then
         UIManager:unschedule(self._drag_preview_repaint_fn)
@@ -262,10 +240,47 @@ function M:_flushDragPreviewRepaint()
     if not self.canvas_bb then
         return -- 关闭后挂起的回调:直接丢弃
     end
+    local pos = self._drag_preview_pos
+    if pos and self._drag_preview then
+        -- 旋转角度守卫:角度几乎未变跳过重建(大 fill 重栅格化数毫秒到数百毫秒)
+        local tr = self._transform
+        local skip = false
+        if tr and self._handle_mode == "rotate" then
+            local sb = tr.bbox
+            local cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
+            local a = math.atan2(pos.y - cy, pos.x - cx)
+            local last = self._drag_preview_angle
+            if last and math.abs(a - last) < const.DRAG_ROTATE_RECALC_ANGLE then
+                skip = true
+            else
+                self._drag_preview_angle = a
+            end
+        end
+        if not skip then
+            local pv = self:_buildDragPreview(pos.x, pos.y)
+            if pv then
+                self:_cacheBBox(pv)
+                local cur = self._drag_preview
+                if not (cur._bbox and pv._bbox
+                    and cur._bbox.x0 == pv._bbox.x0 and cur._bbox.y0 == pv._bbox.y0
+                    and cur._bbox.x1 == pv._bbox.x1 and cur._bbox.y1 == pv._bbox.y1) then
+                    self._drag_preview = pv
+                    self._drag_preview_region = self:_mergeRegions(self._drag_preview_region, self:_elementRegion(pv))
+                end
+            end
+        end
+    end
     local reg = self._drag_preview_region
-    self._drag_preview_region = nil
     if reg then
         UIManager:setDirty(self, "partial", reg)
+    end
+    -- v63c:不清空,改为收敛到"当前预览位置"——收笔(_finishSelectDrag/
+    -- _finishTransform)靠它擦除屏幕上最后画的预览;窗口内没有中间位置累积
+    -- (重建已并入节流,旧版是 pan 逐事件累积、flush 清空)
+    if self._drag_preview then
+        self._drag_preview_region = self:_elementRegion(self._drag_preview)
+    else
+        self._drag_preview_region = nil
     end
 end
 
@@ -436,6 +451,29 @@ function M:_frameCorners(el)
             pts[i] = { x = px, y = py }
         end
         return pts
+    elseif el.kind == "image" and (el.rot or 0) ~= 0 and el.cw then
+        -- 旋转过的图片(v64l):裁剪窗口矩形(自身轴 cww×cwh 转 el.rot)的四角——
+        -- 框贴倾斜的可见窗口(窗口 ⊂ 全图时同样贴;窗口元数据随图走)
+        local cx = (el.x or 0) + el.w / 2
+        local cy = (el.y or 0) + el.h / 2
+        local c, s = math.cos(el.rot), math.sin(el.rot)
+        local hw = (el.cww or el.w) / 2
+        local hh = (el.cwh or el.h) / 2
+        local pts = {
+            { x = cx - hw * c + hh * s, y = cy - hw * s - hh * c },
+            { x = cx + hw * c + hh * s, y = cy + hw * s - hh * c },
+            { x = cx + hw * c - hh * s, y = cy + hw * s + hh * c },
+            { x = cx - hw * c - hh * s, y = cy - hw * s + hh * c },
+        }
+        for _, p in ipairs(pts) do
+            local dx, dy = p.x - cx, p.y - cy
+            local len = math.sqrt(dx * dx + dy * dy)
+            if len > 0.01 then
+                p.x = p.x + dx / len * pad
+                p.y = p.y + dy / len * pad
+            end
+        end
+        return pts
     end
     local b = el._bbox or self:_elementBBox(el)
     if not b then
@@ -464,12 +502,62 @@ function M:_hitHandle(x, y)
     local ids = { "nw", "ne", "se", "sw" }
     local radius = (el.kind == "text")
         and const.TEXT_HANDLE_HIT_RADIUS or const.HANDLE_HIT_RADIUS
+    -- v64m:全部候选锚点(角+边)统一"最近者命中"——旧实现角优先于边,倾斜图
+    -- 边中点到角点两轴曼哈顿距离都 ≤48 时边锚永远被角抢走(拖边=角语义,
+    -- 窗口被错误压扁);最近优先后:点在边上→边近,点在角上→角近,天然正确
+    local best_id, best_d = nil, math.huge
     for i, p in ipairs(pts) do
-        if math.abs(x - p.x) <= radius and math.abs(y - p.y) <= radius then
-            return ids[i]
+        local d = math.sqrt((x - p.x) ^ 2 + (y - p.y) ^ 2)
+        if d <= radius and d < best_d then
+            best_id, best_d = ids[i], d
         end
     end
-    return nil
+    -- 图片 缩放/裁剪 模式(v64d):四边中点锚(缩放=单轴拉伸/裁剪=横向纵向裁剪),
+    -- 垂直于边 ≤24px 才命中——否则小图上边锚吃掉图心,本体拖不动(坑 18 同源)
+    -- 旋转图(v64j/v64l):边中点取窗口 OBB 边(AABB 边中点在倾斜内容之外,锚点不贴边)
+    if el.kind == "image" and (self._handle_mode == "scale" or self._handle_mode == "crop") then
+        local mids = nil
+        if (el.rot or 0) ~= 0 and el.cw then
+            local pts2 = self:_frameCorners(el)
+            if pts2 then
+                mids = {}
+                local ids_edge = { "n", "e", "s", "w" }
+                for i = 1, 4 do
+                    local p1, p2 = pts2[i], pts2[i % 4 + 1]
+                    local ex, ey = p2.x - p1.x, p2.y - p1.y
+                    local l = math.sqrt(ex * ex + ey * ey)
+                    if l > 0.01 then
+                        ex, ey = ex / l, ey / l
+                    end
+                    mids[i] = { x = (p1.x + p2.x) / 2, y = (p1.y + p2.y) / 2,
+                        ux = ex, uy = ey, id = ids_edge[i] }
+                end
+            end
+        end
+        if not mids then
+            local b = el._bbox or self:_elementBBox(el)
+            if b then
+                mids = {
+                    { x = (b.x0 + b.x1) / 2, y = b.y0, ux = 1, uy = 0, id = "n" },
+                    { x = b.x1, y = (b.y0 + b.y1) / 2, ux = 0, uy = 1, id = "e" },
+                    { x = (b.x0 + b.x1) / 2, y = b.y1, ux = 1, uy = 0, id = "s" },
+                    { x = b.x0, y = (b.y0 + b.y1) / 2, ux = 0, uy = 1, id = "w" },
+                }
+            end
+        end
+        if mids then
+            for _, m in ipairs(mids) do
+                local dx, dy = x - m.x, y - m.y
+                local along = dx * m.ux + dy * m.uy
+                local perp = dx * m.uy - dy * m.ux
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d <= radius and math.abs(perp) <= 24 and d < best_d then
+                    best_id, best_d = m.id, d
+                end
+            end
+        end
+    end
+    return best_id
 end
 
 -- 选择工具变形收笔:按锚点拖拽应用 缩放/旋转 到选中对象(可撤销)。
@@ -493,11 +581,26 @@ function M:_finishTransform(x, y)
         return
     end
     local sb = tr.bbox
-    if self._handle_mode == "rotate" then
+    if el.kind == "image" and self._handle_mode == "rotate" then
+        -- 图片旋转(v64f):绕包围盒中心转角差,当前窗口像素重采样烧平(见 drawingpad.image)
+        local cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
+        local a0 = math.atan2(tr.y0 - cy, tr.x0 - cx)
+        local a1 = math.atan2(y - cy, x - cx)
+        self:_applyImageRotate(el, a1 - a0)
+    elseif self._handle_mode == "rotate" then
         local cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
         local a0 = math.atan2(tr.y0 - cy, tr.x0 - cx)
         local a1 = math.atan2(y - cy, x - cx)
         self:_rotateElement(el, a1 - a0, cx, cy)
+    elseif el.kind == "image" and self._handle_mode == "crop" then
+        -- 图片裁剪(v64l base 空间):指针逆旋转到图片自身坐标直接设定窗口,
+        -- 旋转图裁剪沿图片边缘(倾斜框),窗口随图走;rot=0 退化为轴对齐
+        self:_applyImageCrop(el, tr.handle, x, y)
+    elseif el.kind == "image" then
+        -- 图片缩放(v64m):角锚等比(nb 数学);旋转图边锚=沿图片自身轴拉伸
+        -- (handle+指针走 base 空间,_applyImageScale 内分流)
+        local nb = self:_imageTransformBBox(tr.handle, sb, x, y)
+        self:_applyImageScale(el, nb, tr.handle, x, y)
     else
         -- 旋转形状(锚在 OBB 角上)按自身两轴缩放,否则 AABB 角锚路径
         if not self:_scaleElementOriented(el, tr.handle, x, y) then

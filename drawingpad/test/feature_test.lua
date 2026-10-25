@@ -1228,12 +1228,15 @@ do
         check(pb.x0 == 120 and pb.y0 == 300 and pb.x1 == 220 and pb.y1 == 400,
             "preview at drag offset: " .. pb.x0 .. "," .. pb.y0 .. " " .. pb.x1 .. "," .. pb.y1)
         canvas:onPan(nil, { pos = { x = 140, y = 350 }, start_pos = { x = 100, y = 350 } }) -- 又移动:预览跟随更新(不再擦除=无抖动)
+        check(canvas._drag_preview_repaint_pending == true, "follow update schedules throttled repaint")
+        -- v63c:克隆+变形重建并入 0.06s 节流窗口(headless 手动触发,同 _maybeShowDragPreview 模式)
+        canvas:_flushDragPreviewRepaint()
         local pv2 = canvas._drag_preview
         check(pv2 ~= nil, "preview follows finger (no clear)")
         check(pv2._bbox.x0 == 140 and pv2._bbox.y0 == 300 and pv2._bbox.x1 == 240 and pv2._bbox.y1 == 400,
             "preview updated to new offset")
-        check(canvas._drag_preview_repaint_pending == true, "follow update schedules throttled repaint")
         canvas:onPan(nil, { pos = { x = 140, y = 350 }, start_pos = { x = 100, y = 350 } }) -- 同位置:几何未变
+        canvas:_flushDragPreviewRepaint()
         check(canvas._drag_preview == pv2, "no-op position keeps same preview instance (anti-flicker)")
         canvas:onPanRelease(nil, { pos = { x = 140, y = 350 } })
         check(rect.x0 == 140 and rect.y0 == 300 and rect.x1 == 240 and rect.y1 == 400,

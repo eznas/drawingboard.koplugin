@@ -128,6 +128,9 @@ function DrawingCanvas:init()
     self._drag_preview_pos = nil -- 预览定时器记录的最新手指位置
     self._drag_preview_repaint_pending = false -- 预览跟随刷新节流:窗口内只排一次重绘
     self._drag_preview_repaint_fn = nil -- 预览跟随刷新节流定时任务闭包
+    self._standby_held = false -- 作画活动的 standby 保持(引用计数已取;见 actions._noteActivity)
+    self._activity_until = 0 -- 活动保持截止时间(os.time 秒)
+    self._last_hook_refresh = nil -- 挂起计时钩子上次刷新时间(30s 节流)
 
     self:_loadSettings() -- 读取上次保存的工具设置(插件目录;无插件目录时跳过)
 
@@ -171,6 +174,8 @@ function DrawingCanvas:init()
         MultiSwipe = { GestureRange:new{ ges = "multiswipe", range = range } },
         TwoFingerPan = { GestureRange:new{ ges = "two_finger_pan", range = range } },
         Pinch = { GestureRange:new{ ges = "pinch", range = range } },
+        -- 双指张开缩放图片(v64c;捏合走 Pinch)
+        Spread = { GestureRange:new{ ges = "spread", range = range } },
     }
     -- 头部控件放进 self[1](事件先经子组件;最小化时换为"菜单"恢复按钮)
     self[1] = self.toolbar
@@ -220,7 +225,7 @@ function DrawingCanvas:_drawAllLayers()
                 if el.kind == "text" then
                     self:_drawTextTo(self.canvas_bb, el, li)
                 else
-                    shapes.drawElement(self:_alphaBB(self.canvas_bb, el, li), el, Blitbuffer.gray(el.gray))
+                    shapes.drawElement(self:_alphaBB(self.canvas_bb, el, li), el, Blitbuffer.gray(el.gray or 1))
                 end
             end
         end
@@ -339,28 +344,39 @@ function DrawingCanvas:paintTo(bb, x, y)
         bb:paintRect(x, status_y, self.canvas_w, self.status_h, Blitbuffer.COLOR_LIGHT_GRAY)
         local status_text = self._status or ""
         local st_face = Font:getFace("smallinfofont", 15)
-        -- v57 超宽截断:文字超画布 95% 时砍尾部(工具名在前保住,尾部 [重做]/[清空]
-        -- 等模式提示优先级最低先丢),省略号结尾。逐 UTF-8 字符回退,超宽才触发
-        local st_size = RenderText:sizeUtf8Text(0, nil, st_face, status_text, false, false)
-        local st_w = (st_size and st_size.x) or 0
+        -- v63c 测量缓存:_status 只在工具/模式切换时变化,而 paintTo 每个刷新 tick
+        -- (≈0.06s)都会跑——每次 FreeType 重测全串(超宽时更是逐字符全串重测)纯属
+        -- 浪费;同一 _status + 同一 max_w 的截断结果与宽度缓存一次
         local max_w = math.floor(self.canvas_w * 0.95)
-        if st_w > max_w and #status_text > 0 then
-            local function trimLastChar(s)
-                local i = #s
-                while i > 1 do
-                    local b = s:byte(i)
-                    if b < 128 or b >= 192 then break end -- UTF-8 首字节
-                    i = i - 1
+        local meas = self._status_meas
+        if not (meas and meas.src == status_text and meas.max_w == max_w) then
+            -- v57 超宽截断:文字超画布 95% 时砍尾部(工具名在前保住,尾部 [重做]/[清空]
+            -- 等模式提示优先级最低先丢),省略号结尾。逐 UTF-8 字符回退,超宽才触发
+            local st_size = RenderText:sizeUtf8Text(0, nil, st_face, status_text, false, false)
+            local st_w = (st_size and st_size.x) or 0
+            local cut = status_text
+            if st_w > max_w and #cut > 0 then
+                local function trimLastChar(s)
+                    local i = #s
+                    while i > 1 do
+                        local b = s:byte(i)
+                        if b < 128 or b >= 192 then break end -- UTF-8 首字节
+                        i = i - 1
+                    end
+                    return s:sub(1, math.max(0, i - 1))
                 end
-                return s:sub(1, math.max(0, i - 1))
+                while #cut > 0
+                    and RenderText:sizeUtf8Text(0, nil, st_face, cut .. "…", false, false).x > max_w do
+                    cut = trimLastChar(cut)
+                end
+                cut = cut .. "…"
+                st_w = RenderText:sizeUtf8Text(0, nil, st_face, cut, false, false).x
             end
-            while #status_text > 0
-                and RenderText:sizeUtf8Text(0, nil, st_face, status_text .. "…", false, false).x > max_w do
-                status_text = trimLastChar(status_text)
-            end
-            status_text = status_text .. "…"
-            st_w = RenderText:sizeUtf8Text(0, nil, st_face, status_text, false, false).x
+            meas = { src = status_text, max_w = max_w, text = cut, w = st_w }
+            self._status_meas = meas
         end
+        status_text = meas.text
+        local st_w = meas.w
         local st_x = x + math.floor(math.max(0, (self.canvas_w - st_w) / 2))
         RenderText:renderUtf8Text(bb, st_x, status_y + math.floor(self.status_h * 0.75),
             st_face, status_text, false, false, Blitbuffer.gray(1))
@@ -397,21 +413,27 @@ function DrawingCanvas:paintTo(bb, x, y)
             tmp.y = (pv.y or 0) + y
             self:_drawTextTo(bb, tmp)
         else
-            -- v62s:拖拽预览同样不透明化(速度优先,松手后画布重放恢复半透明)
-            shapes.drawElement(bb, pv, Blitbuffer.gray(pv.gray), x, y)
+            -- v62s:拖拽预览同样不透明化(速度优先,松手后画布重放恢复半透明);
+            -- gray or 1:image 元素无 gray 字段(图片不用 color,只求值不崩)
+            shapes.drawElement(bb, pv, Blitbuffer.gray(pv.gray or 1), x, y)
         end
     end
     -- 选中对象高亮框(画在屏幕 BB,不污染画布)。
-    -- 倾斜椭圆/旋转矩形(poly)沿 OBB 画闭合细框(紧贴边界),其余画轴对齐框
+    -- 倾斜椭圆/旋转矩形(poly)沿 OBB 画闭合细框(紧贴边界),其余画轴对齐框。
+    -- v63c:_frameCorners 每 tick 只算一次(下方锚点块复用;旧代码选中期间每个
+    -- 刷新 tick 算两次,文字选中时每次都是全文本 FreeType 测量)
+    local sel_corners
     if self._selected then
         local el = self._selected
-        local pts = self:_frameCorners(el)
-        if pts then
+        sel_corners = self:_frameCorners(el)
+        if sel_corners then
             local hc = Blitbuffer.gray(const.UI_GRAY_HIGHLIGHT)
+            -- 旋转过的图片(v64l,窗口随图走)框贴倾斜窗口矩形
             local rotated = (el.kind == "circle" and (el.rot or 0) ~= 0) or el.kind == "poly"
+                or (el.kind == "image" and (el.rot or 0) ~= 0 and el.cw)
             if rotated then
-                for i = 1, #pts do
-                    local p1, p2 = pts[i], pts[(i % #pts) + 1]
+                for i = 1, #sel_corners do
+                    local p1, p2 = sel_corners[i], sel_corners[(i % #sel_corners) + 1]
                     shapes.thickLine(bb, math.floor(p1.x), math.floor(p1.y),
                         math.floor(p2.x), math.floor(p2.y), 2, hc, "circle")
                 end
@@ -433,25 +455,184 @@ function DrawingCanvas:paintTo(bb, x, y)
             end
         end
     end
+    -- 图片拖角线框预览(v64f 按模式分流):裁剪=自由比例目标框+原窗口浅灰框;
+    -- 缩放=等比目标框;旋转=bbox 四角绕中心转当前角度的闭合线框。
+    -- 框画在屏幕 BB,松手提交时按 _drag_preview_region 擦除
+    if self._transform and self._selected and self._selected.kind == "image"
+        and self._drag_preview_pos then
+        local tr = self._transform
+        local sb = tr.bbox
+        local pos = self._drag_preview_pos
+        local function frame(x0, y0, x1, y1, c)
+            x0 = math.floor(x0); y0 = math.floor(y0)
+            x1 = math.ceil(x1); y1 = math.ceil(y1)
+            bb:paintRect(x0, y0, x1 - x0, 1, c)
+            bb:paintRect(x0, y1 - 1, x1 - x0, 1, c)
+            bb:paintRect(x0, y0, 1, y1 - y0, c)
+            bb:paintRect(x1 - 1, y0, 1, y1 - y0, c)
+        end
+        if self._handle_mode == "rotate" then
+            local pts = self:_imageRotatePreview(tr, pos)
+            local lc = Blitbuffer.gray(1)
+            for i = 1, 4 do
+                local p1, p2 = pts[i], pts[i % 4 + 1]
+                shapes.thickLine(bb, math.floor(p1.x), math.floor(p1.y),
+                    math.floor(p2.x), math.floor(p2.y), 2, lc, "circle")
+            end
+        elseif self._handle_mode == "crop" and (self._selected.rot or 0) ~= 0 then
+            -- 倾斜图裁剪预览(v64l):目标窗口四边形闭合线框(与提交同一 base
+            -- 数学)+原窗口浅灰框(倾斜选中框已在上方画出)
+            local pts = self:_imageCropPreviewQuad(self._selected,
+                tr.handle, pos.x, pos.y)
+            local lc = Blitbuffer.gray(1)
+            for i = 1, 4 do
+                local p1, p2 = pts[i], pts[i % 4 + 1]
+                shapes.thickLine(bb, math.floor(p1.x), math.floor(p1.y),
+                    math.floor(p2.x), math.floor(p2.y), 2, lc, "circle")
+            end
+        elseif self._handle_mode == "scale" and (self._selected.rot or 0) ~= 0 then
+            -- 倾斜图缩放预览(v64m):边锚=沿图片自身轴的目标四边形;角锚=等比
+            -- 因子(f 取自 AABB nb 数学,与提交一致)绕对角的目标四边形——
+            -- 预览框随图片角度,贴倾斜内容
+            local el_sel = self._selected
+            local h = tr.handle
+            local pts
+            if h == "n" or h == "s" or h == "e" or h == "w" then
+                pts = self:_imageScalePreviewQuad(el_sel, h, pos.x, pos.y)
+            else
+                pts = self:_imageScaleCornerQuad(el_sel, h, pos.x, pos.y)
+            end
+            local lc = Blitbuffer.gray(1)
+            for i = 1, 4 do
+                local p1, p2 = pts[i], pts[i % 4 + 1]
+                shapes.thickLine(bb, math.floor(p1.x), math.floor(p1.y),
+                    math.floor(p2.x), math.floor(p2.y), 2, lc, "circle")
+            end
+        else
+            if self._handle_mode == "crop" then
+                frame(sb.x0, sb.y0, sb.x1, sb.y1, Blitbuffer.gray(const.UI_GRAY_HIGHLIGHT))
+            end
+            -- 裁剪=自由比例(_transformBBox),缩放=等比(_imageTransformBBox)
+            local nb = (self._handle_mode == "crop")
+                and self:_transformBBox(tr.handle, sb, pos.x, pos.y)
+                or self:_imageTransformBBox(tr.handle, sb, pos.x, pos.y)
+            frame(nb.x0, nb.y0, nb.x1, nb.y1, Blitbuffer.gray(1))
+        end
+    end
     -- 变形锚点(选择工具 + 有选中对象):四角手柄,位置跟随 _frameCorners(倾斜对象锚在 OBB 角上)。
-    -- 缩放模式=实心方块;再次点选切换旋转模式=实心小圆点;文字不切换(始终方块)
+    -- 缩放模式=实心方块;再次点选切换旋转模式=实心小圆点;
+    -- 图片裁剪模式=Office 式粗线直角括号(v64c);图片缩放模式四边另画粗短杆(拖动=单轴变比例)
     if self.tool == "select" and self._selected then
-        local pts = self:_frameCorners(self._selected)
+        local pts = sel_corners
         if pts then
             local hs = Screen:scaleBySize(6) -- 缩放锚方块半宽(12px,视觉小巧不遮挡;命中半径 48/文字 64)
             local hc = Blitbuffer.gray(const.UI_GRAY_HIGHLIGHT) -- 与选中框同一高亮灰(界面统一)
             local rotate = self._handle_mode == "rotate"
-            local function cornerAt(px, py)
+            local crop = self._handle_mode == "crop"
+            local img_rotate = rotate and self._selected.kind == "image"
+            local function cornerAt(px0, py0, idx, n1, n2)
+                local px, py = math.floor(px0), math.floor(py0)
                 if rotate then
-                    -- 旋转锚:实心小圆点(半径约 5px;命中仍按四角中心 ±HANDLE_HIT_RADIUS)
-                    local r = Screen:scaleBySize(5)
-                    bb:paintCircle(math.floor(px), math.floor(py), r, hc, r)
+                    if img_rotate then
+                        -- 图片旋转锚(v64f):空心圆环(shapes.ellipse 描边)
+                        local r = Screen:scaleBySize(6)
+                        shapes.ellipse(bb, px, py, r, r, 2, hc, "circle")
+                    else
+                        -- 旋转锚:实心小圆点(半径约 5px;命中仍按四角中心 ±HANDLE_HIT_RADIUS)
+                        local r = Screen:scaleBySize(5)
+                        bb:paintCircle(px, py, r, hc, r)
+                    end
+                elseif crop then
+                    -- 裁剪锚(v64e):Office 式粗线直角,臂厚 10px
+                    local len = Screen:scaleBySize(14)
+                    local t = 10
+                    -- v64k:两臂沿相邻锚点连边方向画——随图片角度(未旋转图邻边
+                    -- 即水平/竖直,与旧轴对齐画法逐像素同视觉;旋转图锚点角度=图片角度)
+                    local function dirp(q)
+                        local dx, dy = q.x - px0, q.y - py0
+                        local l = math.sqrt(dx * dx + dy * dy)
+                        if l < 0.01 then
+                            return nil
+                        end
+                        return dx / l, dy / l
+                    end
+                    local ux, uy
+                    local vx, vy
+                    if n1 then
+                        ux, uy = dirp(n1)
+                    end
+                    if n2 then
+                        vx, vy = dirp(n2)
+                    end
+                    if ux and vx then
+                        shapes.thickLine(bb, px, py,
+                            math.floor(px + ux * len), math.floor(py + uy * len), t, hc, "circle")
+                        shapes.thickLine(bb, px, py,
+                            math.floor(px + vx * len), math.floor(py + vy * len), t, hc, "circle")
+                        return
+                    end
+                    local half = 5 -- t/2(臂中心对齐角点)
+                    local arm_right = (idx == 1 or idx == 4) -- nw/sw 横臂向右,ne/se 向左
+                    local arm_down = (idx == 1 or idx == 2)  -- nw/ne 竖臂向下,se/sw 向上
+                    local hx = arm_right and px or (px - len)
+                    local hy = arm_down and py or (py - len)
+                    bb:paintRect(hx, py - half, len, t, hc)
+                    bb:paintRect(px - half, hy, t, len, hc)
                 else
-                    bb:paintRect(math.floor(px) - hs, math.floor(py) - hs, hs * 2, hs * 2, hc)
+                    bb:paintRect(px - hs, py - hs, hs * 2, hs * 2, hc)
                 end
             end
-            for _, p in ipairs(pts) do
-                cornerAt(p.x, p.y)
+            for i, p in ipairs(pts) do
+                cornerAt(p.x, p.y, i, pts[i == 1 and #pts or i - 1], pts[i % #pts + 1])
+            end
+            -- 图片 缩放/裁剪 模式四边中点锚(v64f 视觉区分):缩放=角锚一半大小的
+            -- 实心小方块;裁剪=粗短杆(横向/纵向裁剪)。旋转模式无边锚。
+            -- 命中测试同款位置(_hitHandle)。旋转图(v64j)边中点取 OBB 边——
+            -- AABB 边中点在倾斜内容之外,锚点不贴边
+            if (self._handle_mode == "scale" or self._handle_mode == "crop")
+                and self._selected.kind == "image" then
+                local sel = self._selected
+                local mids = nil
+                if (sel.rot or 0) ~= 0 and sel.cw then
+                    mids = {}
+                    for i = 1, 4 do
+                        local p1, p2 = pts[i], pts[i % 4 + 1]
+                        local ex, ey = p2.x - p1.x, p2.y - p1.y
+                        local l = math.sqrt(ex * ex + ey * ey)
+                        if l > 0.01 then
+                            ex, ey = ex / l, ey / l
+                        end
+                        mids[i] = { x = (p1.x + p2.x) / 2, y = (p1.y + p2.y) / 2, ux = ex, uy = ey }
+                    end
+                else
+                    local b = sel._bbox or self:_elementBBox(sel)
+                    if b then
+                        mids = {
+                            { x = (b.x0 + b.x1) / 2, y = b.y0, ux = 1, uy = 0 },
+                            { x = b.x1, y = (b.y0 + b.y1) / 2, ux = 0, uy = 1 },
+                            { x = (b.x0 + b.x1) / 2, y = b.y1, ux = 1, uy = 0 },
+                            { x = b.x0, y = (b.y0 + b.y1) / 2, ux = 0, uy = 1 },
+                        }
+                    end
+                end
+                if mids then
+                    if self._handle_mode == "scale" then
+                        local hs2 = Screen:scaleBySize(3) -- 角锚(scaleBySize(6))一半
+                        for _, m in ipairs(mids) do
+                            local mx, my = math.floor(m.x), math.floor(m.y)
+                            bb:paintRect(mx - hs2, my - hs2, hs2 * 2, hs2 * 2, hc)
+                        end
+                    else
+                        local bl = Screen:scaleBySize(12) -- 边杆半长
+                        for _, m in ipairs(mids) do
+                            -- 裁剪边杆沿边方向画(倾斜图沿 OBB 边),粗 5px
+                            shapes.thickLine(bb,
+                                math.floor(m.x - m.ux * bl), math.floor(m.y - m.uy * bl),
+                                math.floor(m.x + m.ux * bl), math.floor(m.y + m.uy * bl),
+                                5, hc, "circle")
+                        end
+                    end
+                end
             end
         end
     end
@@ -498,7 +679,7 @@ function DrawingCanvas:_redrawRegion(region)
                             self:_drawTextTo(tmp, t, li)
                         else
                             -- drawElement 对 BB 尺寸自裁剪,负偏移自动丢弃区域外墨迹
-                            shapes.drawElement(self:_alphaBB(tmp, el, li), el, Blitbuffer.gray(el.gray), -rx0, -ry0)
+                            shapes.drawElement(self:_alphaBB(tmp, el, li), el, Blitbuffer.gray(el.gray or 1), -rx0, -ry0)
                         end
                     end)
                     if not ok then
@@ -555,6 +736,7 @@ for _, mod in ipairs({
     require("drawingpad.gestures"),
     require("drawingpad.strokes"),
     require("drawingpad.select"),
+    require("drawingpad.image"),
     require("drawingpad.layers"),
     require("drawingpad.menus"),
     require("drawingpad.actions"),
@@ -569,6 +751,9 @@ end
 -- 错误只写调试日志并照常消费事件,不再炸掉整个程序。
 local function wrapHandler(orig)
     return function(self, ...)
+        -- 作画活动喂狗(v64d):所有手势/入口回调统一推迟 待机/挂起 计时
+        -- (必须在 pcall 外先跑?不——自身全 pcall/守卫,失败不影响原回调)
+        pcall(self._noteActivity, self)
         local ok, err = pcall(orig, self, ...)
         if not ok then
             self:_log("handler error:", tostring(err))
@@ -579,7 +764,7 @@ end
 for _, name in ipairs({
     "onTap", "onPan", "onPanRelease", "onSwipe", "onMultiSwipe",
     "onHold", "onHoldPan", "onHoldRelease",
-    "onTwoFingerPan", "onPinch",
+    "onTwoFingerPan", "onPinch", "onSpread",
     "_maybeShowShapePreview", "_flushStrokeRepaint",
     "onClose", "onCloseWidget",
     "_undo", "_redo", "_clearAll", "_save", "_onClose",
@@ -591,7 +776,7 @@ for _, name in ipairs({
     "_switchLayer", "_toggleLayerVisible", "_showTipMenu", "_showAbout",
     "_showCategoryMenu", "_refreshToolbar", "_showSettingDialog",
     "_refreshCanvas", "_pickSaveFolder", "_doSaveFlow", "_finishTransform",
-    "_pickLayerAlpha",
+    "_pickLayerAlpha", "_importImage",
 }) do
     if DrawingCanvas[name] then
         DrawingCanvas[name] = wrapHandler(DrawingCanvas[name])

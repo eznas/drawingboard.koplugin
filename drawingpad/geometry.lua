@@ -47,19 +47,30 @@ end
 
 -- 元素包围盒(画布坐标);返回 {x0,y0,x1,y1} 或 nil
 -- 文字渲染尺寸(含 sx/sy 拉伸):返回 {w, yt, yb, baseline} 或 nil(face 缺失)。
--- 包围盒/选取框/墨迹距离/绘制共用,保证各处一致的"拉伸后"尺寸
+-- 包围盒/选取框/墨迹距离/绘制共用,保证各处一致的"拉伸后"尺寸。
+-- v63c:单槽记忆——文字选中期间 paintTo 每 tick 调 _frameCorners/_elementBBox
+-- 都会到这里做全文本 FreeType 测量;键覆盖全部输入(text/font/size/sx/sy/y),
+-- 几何变化自动失效,无需手动清缓存
 function M:_textExtent(el)
+    local key = (el.font or "") .. ":" .. (el.text or "") .. ":" .. (el.size or 0)
+        .. ":" .. (el.sx or 1) .. ":" .. (el.sy or 1) .. ":" .. (el.y or 0)
+    if self._te_key == key then
+        return self._te_val
+    end
     local face = Font:getFace(el.font, el.size)
     local s = face and RenderText:sizeUtf8Text(0, nil, face, el.text, false, false)
     if not (s and s.x and s.y_top and s.y_bottom) then
         return nil
     end
-    return {
+    local val = {
         w = s.x * (el.sx or 1),
         yt = s.y_top * (el.sy or 1),
         yb = s.y_bottom * (el.sy or 1),
         baseline = (el.y or 0) + math.floor(el.size * 0.8),
     }
+    self._te_key = key
+    self._te_val = val
+    return val
 end
 
 function M:_elementBBox(el)
@@ -96,6 +107,9 @@ function M:_elementBBox(el)
         for _, sp in ipairs(el.spans) do
             add(sp[2], sp[1], sp[3], sp[1])
         end
+    elseif el.kind == "image" then
+        -- 图片对象(v64):显示矩形(尺寸恒等于 _bb 尺寸)
+        add(el.x, el.y, el.x + el.w, el.y + el.h)
     elseif el.kind == "text" then
         if not el.text or not el.size then
             return nil
@@ -145,7 +159,9 @@ end
 function M:_elementRegion(el, extra)
     extra = extra or 2
     local margin = (el.width or 2) + extra
-    local b = self:_elementBBox(el)
+    -- v63c:优先用提交时缓存的 bbox(拖拽预览/提交路径都已 _cacheBBox;
+    -- 旧代码忽略缓存对 4096 点笔画每调一次全扫一遍)
+    local b = el._bbox or self:_elementBBox(el)
     if not b then
         return nil
     end
@@ -221,6 +237,9 @@ function M:_moveElement(el, dx, dy)
     elseif el.kind == "circle" then
         el.cx, el.cy = el.cx + dx, el.cy + dy
     elseif el.kind == "text" then
+        el.x = (el.x or 0) + dx
+        el.y = (el.y or 0) + dy
+    elseif el.kind == "image" then
         el.x = (el.x or 0) + dx
         el.y = (el.y or 0) + dy
     elseif el.kind == "fill" then
@@ -364,6 +383,10 @@ function M:_scaleElement(el, sb, nb)
         local denom = math.max(0.0001, f)
         el.sx = (el.sx or 1) * (sx / denom)
         el.sy = (el.sy or 1) * (sy / denom)
+    elseif el.kind == "image" then
+        -- 图片缩放(v64):重采样整个 _bb 并按同因子缩放窗口与基准尺寸
+        -- (cw/ch 在 _applyImageScale 内按 fx/fy 更新,旋转框贴内容用)
+        self:_applyImageScale(el, nb)
     elseif el.kind == "fill" then
         -- 有源顶点的路径填充:直接对顶点做同一双线性映射后重算 spans,
         -- 与首次生成同一条扫描线代码;每次变换都从连续几何出发,无累积量化。

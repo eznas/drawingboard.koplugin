@@ -124,6 +124,15 @@ function M:_renderStrokeClose(s)
         maxy = math.max(maxy or p1.y, p0.y, p1.y, p2.y)
         s._seg = k
     end
+    -- 微段模式跳过各段终点盖章,整笔终点显式补一次(与 shapes.polyline 一致,
+    -- 实时笔迹与重绘逐像素相同);circle 笔触终点圆头由端盖覆盖
+    if s.tip ~= nil and s.tip ~= "circle" then
+        shapes.tip(pbb, pts[n].x, pts[n].y, s.width, gray, s.tip)
+        minx = math.min(minx or pts[n].x, pts[n].x)
+        maxx = math.max(maxx or pts[n].x, pts[n].x)
+        miny = math.min(miny or pts[n].y, pts[n].y)
+        maxy = math.max(maxy or pts[n].y, pts[n].y)
+    end
     if minx then
         return minx, miny, maxx, maxy
     end
@@ -359,16 +368,28 @@ end
 -- 只有当前层**之上还有"可见且有内容"的图层**时才需要白刷+按层序重放恢复遮挡。
 -- 之上没有可见内容时新墨迹本来就该在最上层,直接跳过——否则每次落笔/每个元素提交
 -- 都要把区域内的元素(含整幅背景填)重放一遍,元素一多刷新就明显变慢。
--- 跳过时补一次显隐缓存作废(新版核心有乒乓缓存,增量墨迹没经 _redrawRegion)
+-- v63c:进一步按元素相交细化——上层可见有内容但**没有任何元素 bbox 与新笔区域
+-- 相交**时,新墨迹不可能被遮挡,同样跳过(整数比较,代价极低;也消除了"新元素
+-- 提交时先画一遍、重放再画一遍"的双份渲染)。跳过时补一次显隐缓存作废
+-- (新版核心有乒乓缓存,增量墨迹没经 _redrawRegion)
 function M:_commitRegionReplay(region)
     if not region or not self.canvas_bb then
         return
     end
+    local rx0 = math.floor(region.x)
+    local ry0 = math.floor(region.y)
+    local rx1 = math.min(self.canvas_w, math.ceil(region.x + region.w))
+    local ry1 = math.min(self.canvas_h, math.ceil(region.y + region.h))
     local active = self.active_layer or 2
     for li = active + 1, 3 do
         if self.layer_visible[li] and #self.layers[li] > 0 then
-            self:_redrawRegion(region)
-            return
+            for _, el in ipairs(self.layers[li]) do
+                local b = el._bbox or self:_elementBBox(el)
+                if b and b.x0 <= rx1 and b.x1 >= rx0 and b.y0 <= ry1 and b.y1 >= ry0 then
+                    self:_redrawRegion(region)
+                    return
+                end
+            end
         end
     end
     if self._invalidateVisCache then
@@ -693,6 +714,15 @@ function M:_inkDistance(el, px, py)
         }
         local dx = math.max(b.x0 - lx, 0, lx - b.x1)
         local dy = math.max(b.y0 - ly, 0, ly - b.y1)
+        return math.sqrt(dx * dx + dy * dy)
+    elseif el.kind == "image" then
+        -- 图片对象(v64):整块都是可见内容,按包围盒距离近似(同 fill)
+        local b = el._bbox or self:_elementBBox(el)
+        if not b then
+            return math.huge
+        end
+        local dx = math.max(b.x0 - px, 0, px - b.x1)
+        local dy = math.max(b.y0 - py, 0, py - b.y1)
         return math.sqrt(dx * dx + dy * dy)
     elseif el.kind == "fill" then
         -- 填充结果按包围盒近似(不可选取,仅兜底)
