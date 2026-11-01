@@ -65,7 +65,7 @@ canvas.tool = "brush"
 local stroke = { kind = "freehand", points = {}, width = 16, gray = 1, alpha = 0.5, tip = "circle" }
 canvas._stroke = stroke
 for _, p in ipairs(pts) do
-    table.insert(stroke.points, p)
+    stroke.points[#stroke.points + 1] = p.x; stroke.points[#stroke.points + 1] = p.y
     canvas:_renderStrokeTail()
     canvas._stroke_region = canvas:_mergeRegions(canvas._stroke_region,
         canvas:_dirtyRegion(p.x, p.y, p.x, p.y, stroke.width + 2))

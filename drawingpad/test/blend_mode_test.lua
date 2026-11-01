@@ -266,7 +266,7 @@ section("thick slash tip not clipped in alpha compositing", function()
     local function inkBBox(alpha)
         local bb = Blitbuffer.new(300, 300, Blitbuffer.TYPE_BB8)
         bb:paintRect(0, 0, 300, 300, Blitbuffer.COLOR_WHITE)
-        local el = { kind = "freehand", points = { { x = 150, y = 150 } },
+        local el = { kind = "freehand", points = { 150, 150 },
             width = 100, gray = 1.0, alpha = alpha, tip = "slash" }
         shapes.drawElement(shapes.alphaProxy(bb, alpha, "normal"), el, Blitbuffer.gray(el.gray))
         local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge

@@ -1604,7 +1604,11 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix, star
         self.save_folder = (cur == base) and "" or cur
         self:_log("save_folder ->", self.save_folder, "pick file", name)
         if on_pick_file then
-            on_pick_file(name:gsub(file_ext, "")) -- 去掉扩展名,保存流程自动补
+            local stripped = name
+            if type(file_ext) == "string" and not file_ext:find("|") then
+                stripped = name:gsub(file_ext, "")
+            end
+            on_pick_file(stripped, name)
         end
         if on_change then on_change() end
         if dialog then
@@ -1663,7 +1667,21 @@ function M:_pickSaveFolder(on_change, on_pick_file, file_ext, title_prefix, star
                     local mode = lfs.attributes(cur .. "/" .. name, "mode")
                     if mode == "directory" then
                         table.insert(subs, name)
-                    elseif name:lower():match(file_ext) then
+                    elseif (function(fn, ext)
+                        local lower = fn:lower()
+                        if type(ext) == "table" then
+                            for _, p in ipairs(ext) do if lower:match(p) then return true end end
+                            return false
+                        elseif type(ext) == "function" then return ext(fn)
+                        elseif type(ext) == "string" then
+                            if ext:find("|") then
+                                for p in ext:gmatch("[^|]+") do if lower:match(p) then return true end end
+                                return false
+                            end
+                            return lower:match(ext) ~= nil
+                        end
+                        return true
+                    end)(name, file_ext) then
                         table.insert(files, name)
                     end
                 end

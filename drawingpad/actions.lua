@@ -9,6 +9,7 @@ local InputDialog = require("ui/widget/inputdialog")
 local logger = require("logger")
 local components = require("drawingpad.components")
 local const = require("drawingpad.const")
+local shapes = require("drawingpad.shapes")
 local L = require("drawingpad.i18n")
 local _ = require("gettext")
 
@@ -366,7 +367,10 @@ end
 local function serializeValue(v, out)
     local t = type(v)
     if t == "number" then
-        out[#out + 1] = string.format("%.4f", v)
+        -- tostring(%.14g) 最短表示:整数坐标输出 "385" 而非 "385.0000",
+        -- 文件大幅缩水;%.14g 对 ≤14 位有效数字精确还原(坐标 ≤65535 全整数,
+        -- gray/alpha 等 1e-15 级截断不可见)
+        out[#out + 1] = tostring(v)
     elseif t == "boolean" then
         out[#out + 1] = tostring(v)
     elseif t == "string" then
@@ -408,7 +412,7 @@ function M:_doSaveProject(path)
         end
     end
     local data = {
-        version = 1,
+        version = 3,
         active_layer = self.active_layer,
         layer_visible = self.layer_visible,
         layer_alpha = self.layer_alpha,
@@ -417,18 +421,50 @@ function M:_doSaveProject(path)
     local out = { "return " }
     serializeValue(data, out)
     out[#out + 1] = "\n"
+    -- 容器:.dwgz = gzip 压缩的 Lua chunk(magic \x1f\x8b 自检)。
+    -- gzip -9 实测 82KB→17KB(转义文本压缩率极高),压缩/解压 <150ms(真机)。
+    -- 写法:先落临时明文,再 gzip -c 转正式文件;gzip 不可用/失败 → 降级明文
+    -- (加载端按 magic 自动识别,两种容器都能读)。路径走单引号 shell 转义。
+    local GZIP_MAGIC = "\31\139"
+    local function shell_quote(s)
+        return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+    end
+    local tmp = path .. ".tmp"
     local ok, err = pcall(function()
-        local f = io.open(path, "w")
+        local f = io.open(tmp, "w")
         if not f then
-            error("cannot open " .. path)
+            error("cannot open " .. tmp)
         end
         f:write(table.concat(out))
         f:close()
     end)
     if not ok then
         self:_log("save project failed", path, tostring(err))
+        return false
     end
-    return ok
+    local compressed = false
+    if os.execute("gzip -9 -c " .. shell_quote(tmp) .. " > " .. shell_quote(path)) ~= false then
+        local mf = io.open(path, "rb")
+        if mf then
+            local magic = mf:read(2)
+            mf:close()
+            compressed = (magic == GZIP_MAGIC)
+        end
+    end
+    if not compressed then
+        -- gzip 不可用:降级为明文 .dwgz(加载端按 magic 识别)
+        os.remove(path)
+        ok, err = pcall(function()
+            os.rename(tmp, path)
+        end)
+        if not ok then
+            self:_log("save project fallback failed", path, tostring(err))
+            return false
+        end
+    else
+        os.remove(tmp)
+    end
+    return true
 end
 
 -- 保存工程:对话框(文件名 + 文件夹),确认后写入 .drawing
@@ -466,7 +502,7 @@ function M:_saveProject()
     dlg = InputDialog:new{
         title = L.x("保存工程(可再编辑)"),
         input = os.date("drawing_%Y%m%d_%H%M%S"),
-        input_hint = L.x("文件名(自动补 .drawing)"),
+        input_hint = L.x("文件名(自动补 .dwgz)"),
         buttons = {
             {
                 { id = "folder_btn", text = folderLabel(),
@@ -497,7 +533,7 @@ function M:_doSaveProjectFlow(filename)
         components.showToast("Filename cannot contain / or \\", 3)
         return
     end
-    filename = filename .. ".drawing"
+    filename = filename .. ".dwgz"
     local lfs = require("libs/libkoreader-lfs")
     local base = DataStorage:getDataDir() .. "/drawingboard"
     if lfs.attributes(base, "mode") ~= "directory" then
@@ -508,12 +544,12 @@ function M:_doSaveProjectFlow(filename)
         pcall(lfs.mkdir, dir)
     end
     -- 重名自动加序号(与 PNG 保存同语义;_nextSavePath 硬编码 .png,这里独立小循环)
-    local stem = filename:gsub("%.drawing$", "")
+    local stem = filename:gsub("%.dwgz$", "")
     local path = dir .. "/" .. filename
     local n = 1
     while lfs.attributes(path, "mode") == "file" do
         n = n + 1
-        path = dir .. "/" .. stem .. "_" .. n .. ".drawing"
+        path = dir .. "/" .. stem .. "_" .. n .. ".dwgz"
     end
     if self:_doSaveProject(path) then
         components.showToast(L.x("Saved:") .. "\n" .. path, 4)
@@ -523,24 +559,54 @@ function M:_doSaveProjectFlow(filename)
     end
 end
 
--- 打开工程:浏览器列 .drawing 文件(复用文件夹浏览器),选中即载入
+-- 打开工程:浏览器列 .dwgz / .drawing 文件(复用文件夹浏览器),选中即载入
 function M:_openProject()
-    self:_pickSaveFolder(nil, function(name)
+    self:_pickSaveFolder(nil, function(stripped, full_name)
+        -- 浏览器提交当前目录文件名;.dwgz 主格式,.drawing 旧格式原样直通
         local dir = (self.save_folder ~= "") and self.save_folder
             or (DataStorage:getDataDir() .. "/drawingboard")
-        self:_loadProject(dir .. "/" .. name .. ".drawing")
-    end, "%.drawing$", L.x("打开工程: "))
+        local name = full_name or (stripped .. ".dwgz")
+        if not name:match("%.dwgz$") and not name:match("%.drawing$") then
+            name = stripped .. ".dwgz"
+        end
+        self:_loadProject(dir .. "/" .. name)
+    end, "%.dwgz$|%.drawing$", L.x("打开工程: "))
 end
 
--- 载入 .drawing:原位清空三层 元素/撤销/重做 再插入(保持与 layers_* 的引用绑定,
+-- 载入工程(.dwgz = gzip 容器,magic 自检;旧 .drawing 明文兼容):
+-- 原位清空三层 元素/撤销/重做 再插入(保持与 layers_* 的引用绑定,
 -- v61p 教训:换新表会切断绑定),恢复 显隐/透明度/当前层,整幅重绘
 function M:_loadProject(path)
     local lfs = require("libs/libkoreader-lfs")
     if lfs.attributes(path, "mode") ~= "file" then
-        components.showToast(L.x("File not found:") .. "\n" .. path, 3)
-        return
+        -- .dwgz 缺失时回退旧后缀(向后兼容早期工程)
+        local alt = path:gsub("%.dwgz$", ".drawing")
+        if lfs.attributes(alt, "mode") == "file" then
+            path = alt
+        else
+            components.showToast(L.x("File not found:") .. "\n" .. path, 3)
+            return
+        end
     end
-    local chunk_ok, chunk = pcall(loadfile, path)
+    local chunk_ok, chunk
+    local mf = io.open(path, "rb")
+    if mf then
+        local magic = mf:read(2)
+        mf:close()
+        if magic == "\31\139" then
+            -- gzip 容器:解压到内存再解析(单引号转义防路径特殊字符)
+            local quoted = "'" .. path:gsub("'", "'\\''") .. "'"
+            local ph = io.popen("gzip -dc " .. quoted)
+            if ph then
+                local text = ph:read("*a")
+                ph:close()
+                chunk_ok, chunk = pcall(loadstring, text)
+            end
+        end
+    end
+    if not chunk_ok then
+        chunk_ok, chunk = pcall(loadfile, path)
+    end
     if not chunk_ok or type(chunk) ~= "function" then
         components.showToast(L.x("Corrupt project file:") .. "\n" .. path, 3)
         self:_log("load project: loadfile failed", path, tostring(chunk))
@@ -565,9 +631,20 @@ function M:_loadProject(path)
         for i = #red, 1, -1 do
             red[i] = nil
         end
+        -- version≤2 的 points/src_points 是 int16 打包(4B/点);当前格式 float32
+        -- (8B/点,保留小数防变换锯齿)。载入时统一转换,内存里只有 float32。
+        local legacy_i16 = (tonumber(data.version) or 1) <= 2
         for _, el in ipairs(data.layers[li] or {}) do
             if type(el) == "table" and type(el.kind) == "string" then
                 el._bbox = nil -- 私有字段不序列化,载入后重算
+                if legacy_i16 then
+                    if type(el.points) == "string" then
+                        el.points = shapes.packPoints(shapes.unpackPointsI16(el.points))
+                    end
+                    if type(el.src_points) == "string" then
+                        el.src_points = shapes.packPoints(shapes.unpackPointsI16(el.src_points))
+                    end
+                end
                 if el.kind == "image" then
                     -- 图片像素经副本文件重载(v64;失败保留元素但渲染跳过)
                     self:_reloadImageBB(el)

@@ -6,6 +6,7 @@ local Geom = require("ui/geometry")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
 local const = require("drawingpad.const")
+local shapes = require("drawingpad.shapes")
 
 local M = {}
 
@@ -405,14 +406,15 @@ function M:_frameCorners(el)
         return pts
     elseif el.kind == "poly" then
         -- 旋转矩形转 poly:取其角点,绕质心外扩笔宽加 pad
+        local cast, n = shapes.pointCast(el.points)
         local pts = {}
         local cx, cy = 0, 0
-        for i, p in ipairs(el.points) do
-            pts[i] = { x = p.x, y = p.y }
-            cx = cx + p.x
-            cy = cy + p.y
+        for i = 1, n do
+            pts[i] = { x = cast[2*i-2], y = cast[2*i-1] }
+            cx = cx + cast[2*i-2]
+            cy = cy + cast[2*i-1]
         end
-        cx, cy = cx / #pts, cy / #pts
+        cx, cy = cx / n, cy / n
         for _, p in ipairs(pts) do
             local dx, dy = p.x - cx, p.y - cy
             local len = math.sqrt(dx * dx + dy * dy)

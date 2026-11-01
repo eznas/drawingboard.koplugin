@@ -195,17 +195,50 @@ do
     end
 end
 
+-- ============ 3b. 负坐标移动回归(uint16 回绕 → 横线错乱) ============
+do
+    local ok, err = pcall(function()
+        local shapes = require("drawingpad.shapes")
+        local canvas = newCanvas()
+        canvas:_setTool("brush")
+        canvas:onPan(nil, { pos = { x = 50, y = 300 }, start_pos = { x = 50, y = 300 } })
+        canvas:onPan(nil, { pos = { x = 200, y = 300 }, start_pos = { x = 50, y = 300 } })
+        canvas:onPanRelease(nil, { pos = { x = 200, y = 300 } })
+        local el = canvas.elements[1]
+        -- 向左拖出左边缘:坐标变负,int16 必须保号(uint16 会回绕成 ~65535)
+        canvas:_moveElement(el, -100, 0)
+        local pts = shapes.unpackPoints(el.points)
+        check(pts[1] == -50 and pts[3] == 100, "negative x preserved after move, got "
+            .. pts[1] .. "," .. pts[3])
+        canvas:_moveElement(el, 0, -400)
+        pts = shapes.unpackPoints(el.points)
+        check(pts[2] == -100 and pts[4] == -100, "negative y preserved after move, got "
+            .. pts[2] .. "," .. pts[4])
+        -- float32 保留小数:分数位移不被取整(取整会在重复变换边缘累积波浪锯齿)
+        canvas:_moveElement(el, 0.5, 0.25)
+        pts = shapes.unpackPoints(el.points)
+        check(pts[1] == -49.5 and pts[2] == -99.75, "fractional move preserved, got "
+            .. pts[1] .. "," .. pts[2])
+    end)
+    if ok then
+        print("PASS: negative-coord move (int16 no wraparound)")
+    else
+        print("FAIL: negative-coord move:", tostring(err))
+        os.exit(1)
+    end
+end
+
 -- ============ 4. 笔画抽稀 + 最小步距 ============
 do
     local ok, err = pcall(function()
         local canvas = newCanvas()
         local pts = {}
         for i = 1, 10000 do
-            pts[i] = { x = i, y = math.floor(i / 10) }
+            pts[2*i-1], pts[2*i] = i, math.floor(i / 10)
         end
         local out = canvas:_thinPoints(pts)
-        check(#out == 4096, "thin should cap at 4096, got " .. #out)
-        check(out[1].x == 1 and out[#out].x == 10000, "thin should keep first/last")
+        check(#out == 8192, "thin should cap at 4096 pts (8192 flat), got " .. #out)
+        check(out[1] == 1 and out[#out-1] == 10000, "thin should keep first/last")
 
         local canvas2 = newCanvas()
         canvas2:_setTool("brush")
@@ -216,10 +249,11 @@ do
         end
         canvas2:onPanRelease(nil, { pos = { x = 200, y = 300 } })
         local s = canvas2.elements[1]
+        local sp = require("drawingpad.shapes").unpackPoints(s.points)
         check(s ~= nil and s.kind == "freehand", "stroke should commit")
-        check(#s.points < 50, "min_step should cut dense points, got " .. #s.points)
-        check(s.points[1].x == 100 and s.points[#s.points].x == 200, "first/last kept")
-        print(string.format("thin: 10000->4096 first/last kept; min_step: 100 1px-steps -> %d points", #s.points))
+        check(#sp / 2 < 50, "min_step should cut dense points, got " .. #sp / 2)
+        check(sp[1] == 100 and sp[#sp-1] == 200, "first/last kept")
+        print(string.format("thin: 10000->4096 first/last kept; min_step: 100 1px-steps -> %d points", #sp / 2))
     end)
     if ok then
         print("PASS: stroke thinning + min step")

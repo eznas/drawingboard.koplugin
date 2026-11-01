@@ -77,23 +77,28 @@ function M:_renderStrokeTail(s)
         -- 那发 setDirty(partial, nil) = 整屏刷新 = 快速起笔闪屏(慢起笔走 onHold,
         -- 有 `if rx0 then` 守卫,所以不闪)
         s._tip_drawn = true
-        shapes.tip(pbb, pts[1].x, pts[1].y, s.width, gray, s.tip)
-        minx, maxx = pts[1].x, pts[1].x
-        miny, maxy = pts[1].y, pts[1].y
+        shapes.tip(pbb, pts[1], pts[2], s.width, gray, s.tip)
+        minx, maxx = pts[1], pts[1]
+        miny, maxy = pts[2], pts[2]
     end
     -- 段 P_k→P_{k+1} 的右邻点是 P_{k+2}:仅当 k ≤ n-2 可渲染,
-    -- 即循环条件 s._seg + 3 ≤ n(末段留给 _renderStrokeClose)
-    while (s._seg or 0) + 3 <= n do
+    -- 即循环条件 s._seg + 3 ≤ n(末段留给 _renderStrokeClose)。
+    -- points 为扁平数组 {x1,y1,...}:第 i 点 = pts[2i-1], pts[2i]
+    local n2 = n / 2
+    while (s._seg or 0) + 3 <= n2 do
         local k = (s._seg or 0) + 1 -- 渲染段 P_k→P_{k+1}
-        local p0 = pts[math.max(1, k - 1)]
-        local p1, p2, p3 = pts[k], pts[k + 1], pts[k + 2]
+        local j0 = math.max(1, k - 1)
+        local x0, y0 = pts[2*j0-1], pts[2*j0]
+        local x1, y1 = pts[2*k-1], pts[2*k]
+        local x2, y2 = pts[2*k+1], pts[2*k+2]
+        local x3, y3 = pts[2*k+3], pts[2*k+4]
         if pbb then
-            shapes.crSegment(pbb, p0, p1, p2, p3, s.width, gray, s.tip)
+            shapes.crSegment(pbb, x0, y0, x1, y1, x2, y2, x3, y3, s.width, gray, s.tip)
         end
-        minx = math.min(minx or p1.x, p0.x, p1.x, p2.x, p3.x)
-        maxx = math.max(maxx or p1.x, p0.x, p1.x, p2.x, p3.x)
-        miny = math.min(miny or p1.y, p0.y, p1.y, p2.y, p3.y)
-        maxy = math.max(maxy or p1.y, p0.y, p1.y, p2.y, p3.y)
+        minx = math.min(minx or x1, x0, x1, x2, x3)
+        maxx = math.max(maxx or x1, x0, x1, x2, x3)
+        miny = math.min(miny or y1, y0, y1, y2, y3)
+        maxy = math.max(maxy or y1, y0, y1, y2, y3)
         s._seg = k
     end
     if minx then
@@ -108,30 +113,33 @@ function M:_renderStrokeClose(s)
     s = s or self._stroke
     if not s or not s._tip_drawn then return nil end
     local pts = s.points
-    local n = #pts
+    local n = #pts / 2 -- 顶点数(扁平数组)
     if n < 2 then return nil end
     local gray = Blitbuffer.gray(s.gray)
     local pbb = self.canvas_bb
     local minx, miny, maxx, maxy
     while (s._seg or 0) < n - 1 do
         local k = (s._seg or 0) + 1
-        local p0 = pts[math.max(1, k - 1)]
-        local p1, p2 = pts[k], pts[k + 1]
-        shapes.crSegment(pbb, p0, p1, p2, p2, s.width, gray, s.tip)
-        minx = math.min(minx or p1.x, p0.x, p1.x, p2.x)
-        maxx = math.max(maxx or p1.x, p0.x, p1.x, p2.x)
-        miny = math.min(miny or p1.y, p0.y, p1.y, p2.y)
-        maxy = math.max(maxy or p1.y, p0.y, p1.y, p2.y)
+        local j0 = math.max(1, k - 1)
+        local x0, y0 = pts[2*j0-1], pts[2*j0]
+        local x1, y1 = pts[2*k-1], pts[2*k]
+        local x2, y2 = pts[2*k+1], pts[2*k+2]
+        shapes.crSegment(pbb, x0, y0, x1, y1, x2, y2, x2, y2, s.width, gray, s.tip)
+        minx = math.min(minx or x1, x0, x1, x2)
+        maxx = math.max(maxx or x1, x0, x1, x2)
+        miny = math.min(miny or y1, y0, y1, y2)
+        maxy = math.max(maxy or y1, y0, y1, y2)
         s._seg = k
     end
     -- 微段模式跳过各段终点盖章,整笔终点显式补一次(与 shapes.polyline 一致,
     -- 实时笔迹与重绘逐像素相同);circle 笔触终点圆头由端盖覆盖
     if s.tip ~= nil and s.tip ~= "circle" then
-        shapes.tip(pbb, pts[n].x, pts[n].y, s.width, gray, s.tip)
-        minx = math.min(minx or pts[n].x, pts[n].x)
-        maxx = math.max(maxx or pts[n].x, pts[n].x)
-        miny = math.min(miny or pts[n].y, pts[n].y)
-        maxy = math.max(maxy or pts[n].y, pts[n].y)
+        local ex, ey = pts[2*n-1], pts[2*n]
+        shapes.tip(pbb, ex, ey, s.width, gray, s.tip)
+        minx = math.min(minx or ex, ex)
+        maxx = math.max(maxx or ex, ex)
+        miny = math.min(miny or ey, ey)
+        maxy = math.max(maxy or ey, ey)
     end
     if minx then
         return minx, miny, maxx, maxy
@@ -146,8 +154,8 @@ function M:_extendStroke(x, y)
         return
     end
     local pts = s.points
-    local last = pts[#pts]
-    if last and last.x == x and last.y == y then
+    local lx, ly = pts[#pts-1], pts[#pts]
+    if lx == x and ly == y then
         return -- 去重
     end
     -- 慢笔画会产生大量 1px 内的密集点:按笔宽比例设最小步距,步距内跳过。
@@ -156,10 +164,11 @@ function M:_extendStroke(x, y)
     -- 圆头/粗线在步距内的墨迹完全重叠,视觉无差异,但单笔点数量级下降,
     -- 长会话的内存与橡皮/保存扫描成本都显著收敛
     local min_step = math.min(3, math.max(1, math.floor(s.width / 8)))
-    if last and math.abs(last.x - x) < min_step and math.abs(last.y - y) < min_step then
+    if lx and math.abs(lx - x) < min_step and math.abs(ly - y) < min_step then
         return
     end
-    table.insert(pts, { x = x, y = y })
+    pts[#pts + 1] = x
+    pts[#pts + 1] = y
     local rx0, ry0, rx1, ry1 = self:_renderStrokeTail()
     if not rx0 then
         return
@@ -192,11 +201,14 @@ end
 -- 覆盖整笔——只擦"本轮新段"会让旧前缀在每次 flush 上反复叠加 alpha(矩形阶梯马赛克)
 function M:_strokeRegion(s)
     local minx, miny, maxx, maxy = math.huge, math.huge, -math.huge, -math.huge
-    for _, p in ipairs(s.points) do
-        if p.x < minx then minx = p.x end
-        if p.x > maxx then maxx = p.x end
-        if p.y < miny then miny = p.y end
-        if p.y > maxy then maxy = p.y end
+    -- s 可能已提交打包(_finishStroke 的 alpha 分支在打包后调用;pointCast 兼容字串/double 表)
+    local cast, n = shapes.pointCast(s.points)
+    for i = 1, n do
+        local x, y = cast[2*i-2], cast[2*i-1]
+        if x < minx then minx = x end
+        if x > maxx then maxx = x end
+        if y < miny then miny = y end
+        if y > maxy then maxy = y end
     end
     if minx == math.huge then
         return nil
@@ -243,8 +255,9 @@ end
 
 -- 抽稀:点数超 MAX_STROKE_POINTS 时均匀保留(保首尾)。
 -- 只影响超长笔画,视觉几乎无差异;把单笔内存与后续扫描成本收敛到上限内
+-- 扁平数组版本:输入/输出均为 {x1,y1,...},n = #points/2
 function M:_thinPoints(points)
-    local n = #points
+    local n = #points / 2
     if n <= const.MAX_STROKE_POINTS then
         return points
     end
@@ -252,9 +265,11 @@ function M:_thinPoints(points)
     local step = (n - 1) / (const.MAX_STROKE_POINTS - 1)
     for i = 1, const.MAX_STROKE_POINTS do
         local idx = math.max(1, math.min(n, math.floor(1 + (i - 1) * step + 0.5)))
-        out[i] = points[idx]
+        out[2*i-1] = points[2*idx-1]
+        out[2*i] = points[2*idx]
     end
-    out[const.MAX_STROKE_POINTS] = points[n] -- 保证尾点精确
+    out[2*const.MAX_STROKE_POINTS-1] = points[#points-1] -- 保证尾点精确
+    out[2*const.MAX_STROKE_POINTS] = points[#points]
     return out
 end
 
@@ -266,9 +281,10 @@ function M:_finishStroke(x, y)
     end
     local last_reg
     if x then
-        local last = s.points[#s.points]
-        if not last or last.x ~= x or last.y ~= y then
-            table.insert(s.points, { x = x, y = y })
+        local pts = s.points
+        if not pts[#pts-1] or pts[#pts-1] ~= x or pts[#pts] ~= y then
+            pts[#pts + 1] = x
+            pts[#pts + 1] = y
         end
     end
     -- 增量消费剩余点 + 收尾半段(从最后中点弯到末点,与 shapes.polyline 一致)。
@@ -284,7 +300,7 @@ function M:_finishStroke(x, y)
     end
     if #s.points > 0 then
         -- 超长笔画均匀抽稀(保首尾):限制单笔内存与后续扫描成本
-        if #s.points > const.MAX_STROKE_POINTS then
+        if #s.points > 2 * const.MAX_STROKE_POINTS then
             s.points = self:_thinPoints(s.points)
         end
         if self.tool == "fill" then
@@ -293,11 +309,14 @@ function M:_finishStroke(x, y)
             self:_commitFillPath(s)
             return
         end
+        -- 提交即打包为大字串(4 字节/点):克隆/快照共享引用,内存 5x 省;
+        -- fill 分支的 src_points 同样打包(见 _commitFillPath)
+        s.points = shapes.packPoints(s.points)
         table.insert(self.elements, s)
         self:_cacheBBox(s)
         self:_pushUndo({ kind = "add", el = s })
         self:_clearRedo()
-        self:_log("commit stroke", s.kind, #s.points, "points, gray", s.gray, "width", s.width)
+        self:_log("commit stroke", s.kind, #s.points / 4, "points, gray", s.gray, "width", s.width)
     end
     -- 收笔刷新:提交区域 = 最后一段 ∪ 节流累积区域(覆盖整笔)。
     -- 增量墨迹直接画进 canvas_bb 恒在最上,当前层之上有可见图层时必须
@@ -401,7 +420,7 @@ end
 function M:_commitDot(x, y)
     local el = {
         kind = "freehand",
-        points = { { x = x, y = y } },
+        points = shapes.packPoints({ x, y }),
         gray = self:_resolveGray(),
         alpha = self:_resolveAlpha(),
         blend = self.alpha_blend,
@@ -617,29 +636,30 @@ end
 -- 选取点到元素"着墨点"(实际绘制像素)的距离;0 = 点在墨迹上
 function M:_inkDistance(el, px, py)
     if el.kind == "freehand" or el.kind == "eraser" then
-        local pts = el.points
+        local cast, n = shapes.pointCast(el.points) -- 打包字串或活跃 double 表
         local d = math.huge
-        for i = 2, #pts do
-            local a, b = pts[i - 1], pts[i]
-            local s = const.pointSegDist(px, py, a.x, a.y, b.x, b.y)
+        for i = 2, n do
+            local s = const.pointSegDist(px, py,
+                cast[2*i-4], cast[2*i-3], cast[2*i-2], cast[2*i-1])
             if s < d then d = s end
         end
-        if #pts == 1 then
-            d = math.sqrt((px - pts[1].x) ^ 2 + (py - pts[1].y) ^ 2)
+        if n == 1 then
+            d = math.sqrt((px - cast[0]) ^ 2 + (py - cast[1]) ^ 2)
         end
         -- 笔画有厚度:墨迹表面距离 = 中心线距离 - 半径
         return math.max(0, d - (el.width or 2) / 2)
     elseif el.kind == "poly" then
         -- 闭合多边形(旋转后的矩形):各边(含首尾闭合段)的距离
-        local pts = el.points
-        local n = #pts
+        local cast, n = shapes.pointCast(el.points)
         -- 实心:内部即墨迹(偶奇规则点在多边形内,v61k 与渲染同步)
         if el.filled then
             local inside = false
             for i = 1, n do
-                local a, b = pts[i], pts[(i % n) + 1]
-                if (a.y <= py and b.y > py) or (b.y <= py and a.y > py) then
-                    local xin = a.x + (py - a.y) * (b.x - a.x) / (b.y - a.y)
+                local j = (i % n) + 1
+                local ax, ay = cast[2*i-2], cast[2*i-1]
+                local bx, by = cast[2*j-2], cast[2*j-1]
+                if (ay <= py and by > py) or (by <= py and ay > py) then
+                    local xin = ax + (py - ay) * (bx - ax) / (by - ay)
                     if px < xin then inside = not inside end
                 end
             end
@@ -649,8 +669,9 @@ function M:_inkDistance(el, px, py)
         end
         local d = math.huge
         for i = 1, n do
-            local a, b = pts[i], pts[(i % n) + 1]
-            local s = const.pointSegDist(px, py, a.x, a.y, b.x, b.y)
+            local j = (i % n) + 1
+            local s = const.pointSegDist(px, py,
+                cast[2*i-2], cast[2*i-1], cast[2*j-2], cast[2*j-1])
             if s < d then d = s end
         end
         return math.max(0, d - (el.width or 2) / 2)
@@ -805,9 +826,9 @@ function M:_trackErasePath(ges)
     local x, y = self:_toCanvas(ges.pos.x, ges.pos.y)
     if x then
         local pts = self._erase_path.points
-        local last = pts[#pts]
-        if not last or last.x ~= x or last.y ~= y then
-            table.insert(pts, { x = x, y = y })
+        if pts[#pts-1] ~= x or pts[#pts] ~= y then
+            pts[#pts + 1] = x
+            pts[#pts + 1] = y
         end
     end
 end
@@ -820,11 +841,12 @@ function M:_commitErasePath(x, y)
         return
     end
     local minx, miny, maxx, maxy = math.huge, math.huge, -math.huge, -math.huge
-    for _, p in ipairs(path.points) do
-        if p.x < minx then minx = p.x end
-        if p.y < miny then miny = p.y end
-        if p.x > maxx then maxx = p.x end
-        if p.y > maxy then maxy = p.y end
+    local pts = path.points
+    for i = 1, #pts, 2 do
+        if pts[i] < minx then minx = pts[i] end
+        if pts[i+1] < miny then miny = pts[i+1] end
+        if pts[i] > maxx then maxx = pts[i] end
+        if pts[i+1] > maxy then maxy = pts[i+1] end
     end
     local m = self.width + 4
     self:_eraseInRect(minx - m, miny - m, maxx + m, maxy + m)
@@ -943,21 +965,25 @@ end
 -- 返回 span 列表 { {y, x0, x1}, ... }(自交路径如 8 字形按偶奇规则分块)
 function M:_polygonFillSpans(pts)
     local spans = {}
-    local n = #pts
+    -- 接受打包字串(已提交 fill 的 src_points)或扁平 double 表(提交时的 smooth)
+    local cast, n = shapes.pointCast(pts)
     if n < 3 then
         return spans
     end
     local y_min, y_max = math.huge, -math.huge
-    for _, p in ipairs(pts) do
-        if p.y < y_min then y_min = p.y end
-        if p.y > y_max then y_max = p.y end
+    for i = 1, n do
+        local y = cast[2*i-1]
+        if y < y_min then y_min = y end
+        if y > y_max then y_max = y end
     end
     for y = math.floor(y_min), math.ceil(y_max) do
         local xs = {}
         for i = 1, n do
-            local a, b = pts[i], pts[(i % n) + 1]
-            if (a.y <= y and b.y > y) or (b.y <= y and a.y > y) then
-                table.insert(xs, a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y))
+            local j = (i % n) + 1
+            local ax, ay = cast[2*i-2], cast[2*i-1]
+            local bx, by = cast[2*j-2], cast[2*j-1]
+            if (ay <= y and by > y) or (by <= y and ay > y) then
+                table.insert(xs, ax + (y - ay) * (bx - ax) / (by - ay))
             end
         end
         table.sort(xs)
@@ -979,14 +1005,14 @@ end
 -- 新点恒在折线上 → 天然无过冲、无尖峰、无尖角(收敛到二次均匀 B 样条,C1 平滑);
 -- 迭代 rounds 轮后末点回到首点闭合。不假设首=末:先去掉与首点重合的末点,
 -- 再对唯一点序列循环(闭合段由落笔趋势延续到起点,自然圆滑)。
--- 返回闭合的平滑点序列(供填充边界扫描)
+-- 返回闭合的平滑点序列(扁平数组,供填充边界扫描)
 function M:_smoothClosedPath(pts, rounds)
     rounds = rounds or 2
-    local n = #pts
+    local n = #pts / 2 -- 顶点数
     -- 去掉与首点重合的末点(用户已闭合);未闭合(末≠首)则保留全部点,循环自动闭合
-    local first = pts[1]
-    local last_p = pts[n]
-    if last_p and last_p.x == first.x and last_p.y == first.y then
+    local fx, fy = pts[1], pts[2]
+    local lx, ly = pts[2*n-1], pts[2*n]
+    if lx == fx and ly == fy then
         n = n - 1
     end
     if n < 3 then
@@ -994,32 +1020,34 @@ function M:_smoothClosedPath(pts, rounds)
     end
     local cur = {}
     for i = 1, n do
-        cur[i] = { x = pts[i].x, y = pts[i].y }
+        cur[2*i-1], cur[2*i] = pts[2*i-1], pts[2*i]
     end
     local m = n
     for r = 1, rounds do
         local nxt = {}
+        local k = 0
         for i = 1, m do
             -- 段 P1→P2 产生 3/4 点(靠近 P1)与 1/4 点(靠近 P2),标准 corner cutting
-            local p1 = cur[i]
-            local p2 = cur[(i % m) + 1]
-            nxt[#nxt + 1] = {
-                x = p1.x * 0.75 + p2.x * 0.25,
-                y = p1.y * 0.75 + p2.y * 0.25,
-            }
-            nxt[#nxt + 1] = {
-                x = p1.x * 0.25 + p2.x * 0.75,
-                y = p1.y * 0.25 + p2.y * 0.75,
-            }
+            local j = (i % m) + 1
+            local p1x, p1y = cur[2*i-1], cur[2*i]
+            local p2x, p2y = cur[2*j-1], cur[2*j]
+            nxt[k + 1] = p1x * 0.75 + p2x * 0.25
+            nxt[k + 2] = p1y * 0.75 + p2y * 0.25
+            nxt[k + 3] = p1x * 0.25 + p2x * 0.75
+            nxt[k + 4] = p1y * 0.25 + p2y * 0.75
+            k = k + 4
         end
         cur = nxt
-        m = #cur
+        m = #cur / 2
     end
     -- 闭合:末点回到平滑序列的首点(Chaikin 切角后首点=首段 3/4 点,非原始起点)
     local first = cur[1]
-    local last = cur[#cur]
-    if last and (last.x ~= first.x or last.y ~= first.y) then
-        cur[#cur + 1] = { x = first.x, y = first.y }
+    local cfy = cur[2]
+    local last = cur[#cur-1]
+    local lfy = cur[#cur]
+    if last ~= first or lfy ~= cfy then
+        cur[#cur + 1] = first
+        cur[#cur + 1] = cfy
     end
     return cur
 end
@@ -1029,7 +1057,7 @@ end
 -- 退化(点数不足/共线)时清掉路径墨迹、不留任何东西。
 function M:_commitFillPath(s)
     self:_freeAlphaStrokeSnap() -- fill 不消费快照:提交时立即释放,避免全屏 BB 常驻
-    if not s or not s.points or #s.points < 3 then
+    if not s or not s.points or #s.points < 6 then -- 不足 3 点(扁平数组 6 数)
         -- 退化路径:白刷已画的路径墨迹,不留路径也不留填充
         if s then
             local region = self:_elementRegion(s)
@@ -1062,9 +1090,10 @@ function M:_commitFillPath(s)
         end
         return
     end
-    -- src_points 保存平滑后源顶点:后续旋转/缩放只变换顶点重算 spans,
-    -- 不再从量化 span 反建几何,避免逐次变换向外漂移(穿模细线)
-    local el = { kind = "fill", spans = spans, src_points = smooth,
+    -- src_points 保存平滑后源顶点(打包字串,与 freehand points 同存储):
+    -- 后续旋转/缩放只变换顶点重算 spans,不再从量化 span 反建几何,
+    -- 避免逐次变换向外漂移(穿模细线);取整误差 ≤0.5px/次(有界)
+    local el = { kind = "fill", spans = spans, src_points = shapes.packPoints(smooth),
         gray = s.gray or self:_resolveGray(), alpha = s.alpha or self:_resolveAlpha(),
         blend = s.blend or self.alpha_blend }
     table.insert(self.elements, el)

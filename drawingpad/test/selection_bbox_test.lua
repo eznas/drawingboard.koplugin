@@ -76,7 +76,7 @@ check(dist0 >= r_diag_with_pen, "rot circle corner outside ink: dist=" .. dist0 
 print("PASS: 3. Rotated circle handles strictly outside stroke")
 
 -- 4. 画笔工具 freehand(width=30, points 100..200)
-local freehand = { kind = "freehand", points = { { x = 100, y = 100 }, { x = 200, y = 100 } }, width = 30, gray = 0 }
+local freehand = { kind = "freehand", points = { 100, 100, 200, 100 }, width = 30, gray = 0 }
 local b_free = canvas:_elementBBox(freehand)
 -- 墨迹半径 = 15, 实际墨迹范围 = [85, 85, 215, 115]
 check(b_free.x0 == 85 and b_free.x1 == 215, "freehand bbox x: expected [85, 215], got [" .. b_free.x0 .. ", " .. b_free.x1 .. "]")

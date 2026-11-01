@@ -1326,4 +1326,72 @@ section("pristine upgrade from original file on upscale (v65c)", function()
         "reloaded pixels match live, dark " .. dark2 .. " vs " .. live_dark)
 end)
 
+
+section("common image formats import + size detection (PNG/JPG/BMP/GIF/WEBP) (v65d)", function()
+    local c = newCanvas()
+    -- 1. 测试各格式 _imageSize 头探测
+    local formats = {
+        { ext = "png", exp_w = 200, exp_h = 150, fmt = "png" },
+        { ext = "jpg", exp_w = 200, exp_h = 150, fmt = "jpeg" },
+        { ext = "jpeg", exp_w = 200, exp_h = 150, fmt = "jpeg" },
+        { ext = "bmp", exp_w = 200, exp_h = 150, fmt = "bmp" },
+        { ext = "gif", exp_w = 200, exp_h = 150, fmt = "gif" },
+        { ext = "webp", exp_w = 200, exp_h = 150, fmt = "webp" },
+    }
+    for _, item in ipairs(formats) do
+        local path = "/mnt/e/zcode/tmp/img_test/test_img." .. item.ext
+        local w, h, fmt = c:_imageSize(path)
+        check(w == item.exp_w and h == item.exp_h,
+            string.format("%s: expected %dx%d, got %sx%s", item.ext, item.exp_w, item.exp_h, tostring(w), tostring(h)))
+        check(fmt == item.fmt, string.format("%s: expected fmt %s, got %s", item.ext, item.fmt, tostring(fmt)))
+    end
+
+    -- 2. 测试逐一导入各格式图片到画布
+    for _, item in ipairs(formats) do
+        local c2 = newCanvas()
+        local path = "/mnt/e/zcode/tmp/img_test/test_img." .. item.ext
+        c2:_importImageFile(path)
+        check(#c2.elements == 1, item.ext .. ": element imported")
+        local el = c2.elements[1]
+        check(el.kind == "image", item.ext .. ": kind is image")
+        check(el.src == path, item.ext .. ": el.src is direct link")
+        check(el._bb ~= nil and el._orig ~= nil, item.ext .. ": blitbuffers initialized")
+        check(el.w > 0 and el.h > 0, item.ext .. ": dimensions valid")
+        -- 灰度渲染验证: 均值在有效范围(纯色样本有真实着墨)
+        local pixel = el._bb:getPixel(0, 0)
+        local gray = type(pixel) == "number" and pixel or pixel.a
+        check(gray > 0 and gray < 255, item.ext .. ": valid gray pixel " .. tostring(gray))
+
+        -- 旋转与缩放变换验证
+        c2:_applyImageRotate(el, math.pi / 2)
+        check(math.abs((el.rot or 0) - math.pi / 2) < 0.01, item.ext .. ": rotation applied")
+        c2:_applyImageBaseScaleF(el, 1.2, 1.2, el.cx0 + el.cww / 2, el.cy0 + el.cwh / 2)
+        check(el.cw > 0, item.ext .. ": scaled")
+
+        -- 工程保存与重新加载往返验证
+        local proj_path = "/tmp/dp_test_fmt_" .. item.ext .. ".drawing"
+        check(c2:_doSaveProject(proj_path), item.ext .. ": project saved")
+        c2:_loadProject(proj_path)
+        check(#c2.elements == 1, item.ext .. ": reloaded")
+        local el_rel = c2.elements[1]
+        check(el_rel.src == path, item.ext .. ": reloaded src preserved")
+        check(el_rel._orig ~= nil and el_rel._bb ~= nil, item.ext .. ": reloaded bb reconstructed")
+    end
+
+    -- 3. 验证 _onImagePicked 回调对多格式文件名的解析与默认后缀填充
+    local picked_path = nil
+    c._importImageFile = function(self, p)
+        picked_path = p
+    end
+    c.save_folder = "/dummy/dir"
+    c:_onImagePicked("my_pic.jpg", "/dummy/dir")
+    check(picked_path == "/dummy/dir/my_pic.jpg", "onImagePicked preserved .jpg: " .. tostring(picked_path))
+    c:_onImagePicked("banner.webp", "/dummy/dir")
+    check(picked_path == "/dummy/dir/banner.webp", "onImagePicked preserved .webp: " .. tostring(picked_path))
+    c:_onImagePicked("sketch.BMP", "/dummy/dir")
+    check(picked_path == "/dummy/dir/sketch.BMP", "onImagePicked preserved .BMP: " .. tostring(picked_path))
+    c:_onImagePicked("plain_name", "/dummy/dir")
+    check(picked_path == "/dummy/dir/plain_name.png", "onImagePicked default fallback to .png: " .. tostring(picked_path))
+end)
+
 print("image_test: ALL PASS")

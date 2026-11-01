@@ -81,6 +81,7 @@ local SHAPE_MIN_SIZE = 8
 -- 图片导入(v64):PNG 单边像素上限(IHDR 预检拒绝——renderImageFile 先全尺寸解码
 -- 再缩放,峰值≈RGBA 全图,512MB 无 swap 设备必须前置护栏)与导入适配比例
 -- (缩到画布该比例内,保纵横比)
+local IMAGE_EXT_PATTERN = "%.png$|%.jpe?g$|%.bmp$|%.gif$|%.webp$"
 local IMAGE_MAX_DIM = 2500
 local IMAGE_FIT_RATIO = 0.9
 
@@ -129,7 +130,7 @@ local TOOL_NAMES = {
 local LAYER_COUNT = 3
 
 -- 插件版本与作者(关于弹窗;版本与 GitHub eznas/drawingboard.koplugin 保持一致或更高)
-local PLUGIN_VERSION = "v65c"
+local PLUGIN_VERSION = "v65d"
 local PLUGIN_AUTHOR = "eznas"
 
 -- 图层命名:索引 1=下层(最先绘制,最底) 2=中层 3=上层(最后绘制,最顶);
@@ -223,6 +224,7 @@ return {
     GESTURE_PAN_THRESHOLD_DP = GESTURE_PAN_THRESHOLD_DP,
     GESTURE_HOLD_INTERVAL_MS = GESTURE_HOLD_INTERVAL_MS,
     SHAPE_MIN_SIZE = SHAPE_MIN_SIZE,
+    IMAGE_EXT_PATTERN = IMAGE_EXT_PATTERN,
     IMAGE_MAX_DIM = IMAGE_MAX_DIM,
     IMAGE_FIT_RATIO = IMAGE_FIT_RATIO,
     STANDBY_HOLD_SECONDS = STANDBY_HOLD_SECONDS,

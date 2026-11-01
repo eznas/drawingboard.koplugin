@@ -21,40 +21,140 @@ local M = {}
 
 -- 读 PNG IHDR 宽高(文件头 17-24 字节大端);返回 w, h 或 nil(非 PNG/读失败)。
 -- 导入前内存护栏:renderImageFile 会先全尺寸解码再缩放,超大图直接拒绝
-local function pngSize(path)
-    local ok, w, h = pcall(function()
+local function read_u16_be(s, pos)
+    local b1, b2 = s:byte(pos, pos + 1)
+    return b1 * 256 + b2
+end
+local function read_u16_le(s, pos)
+    local b1, b2 = s:byte(pos, pos + 1)
+    return b2 * 256 + b1
+end
+local function read_u32_be(s, pos)
+    local b1, b2, b3, b4 = s:byte(pos, pos + 3)
+    return b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+end
+local function read_u32_le(s, pos)
+    local b1, b2, b3, b4 = s:byte(pos, pos + 3)
+    return b4 * 16777216 + b3 * 65536 + b2 * 256 + b1
+end
+
+-- v65d:读常见图片格式宽高(PNG/JPEG/GIF/BMP/WEBP),只读文件头(零整图解码开销)
+-- 导入前内存护栏:超大尺寸直接拦截,无需全图解码
+local function imageSize(path)
+    local ok, w, h, fmt = pcall(function()
         local f = io.open(path, "rb")
-        if not f then
+        if not f then return nil end
+        local head = f:read(512)
+        if not head or #head < 8 then
+            f:close()
             return nil
         end
-        local head = f:read(24)
+
+        -- 1. PNG: 8 bytes sig + 4 bytes len + "IHDR" + 4 bytes W + 4 bytes H
+        local png_sig = string.char(137, 80, 78, 71, 13, 10, 26, 10)
+        if head:sub(1, 8) == png_sig and #head >= 24 and head:sub(13, 16) == "IHDR" then
+            f:close()
+            return read_u32_be(head, 17), read_u32_be(head, 21), "png"
+        end
+
+        -- 2. GIF: "GIF87a" or "GIF89a", width and height at bytes 7..10 (LE)
+        if head:sub(1, 6) == "GIF87a" or head:sub(1, 6) == "GIF89a" then
+            f:close()
+            return read_u16_le(head, 7), read_u16_le(head, 9), "gif"
+        end
+
+        -- 3. BMP: "BM", width at 19..22 (LE), height at 23..26 (LE, signed)
+        if head:sub(1, 2) == "BM" and #head >= 26 then
+            f:close()
+            local bw = read_u32_le(head, 19)
+            local bh = read_u32_le(head, 23)
+            if bh > 2147483647 then bh = 4294967296 - bh end
+            return bw, bh, "bmp"
+        end
+
+        -- 4. WEBP: "RIFF....WEBP"
+        if head:sub(1, 4) == "RIFF" and head:sub(9, 12) == "WEBP" and #head >= 30 then
+            local tag = head:sub(13, 16)
+            if tag == "VP8 " and #head >= 30 then
+                local b0, b1, b2 = head:byte(24, 26)
+                if b0 == 0x9d and b1 == 0x01 and b2 == 0x2a then
+                    f:close()
+                    local ww = read_u16_le(head, 27) % 16384
+                    local wh = read_u16_le(head, 29) % 16384
+                    return ww, wh, "webp"
+                end
+            elseif tag == "VP8L" and #head >= 25 then
+                if head:byte(21) == 0x2f then
+                    f:close()
+                    local b1, b2, b3, b4 = head:byte(22, 25)
+                    local ww = 1 + bit.band(b1 + bit.lshift(bit.band(b2, 0x3f), 8), 0x3fff)
+                    local wh = 1 + bit.band(bit.rshift(b2, 6) + bit.lshift(b3, 2) + bit.lshift(bit.band(b4, 0x0f), 10), 0x3fff)
+                    return ww, wh, "webp"
+                end
+            elseif tag == "VP8X" and #head >= 30 then
+                f:close()
+                local b1, b2, b3 = head:byte(25, 27)
+                local ww = 1 + (b1 + b2 * 256 + b3 * 65536)
+                local b4, b5, b6 = head:byte(28, 30)
+                local wh = 1 + (b4 + b5 * 256 + b6 * 65536)
+                return ww, wh, "webp"
+            end
+        end
+
+        -- 5. JPEG: Starts with 0xFF 0xD8
+        if head:byte(1) == 0xff and head:byte(2) == 0xd8 then
+            local offset = 3
+            while offset < 65536 do
+                f:seek("set", offset - 1)
+                local marker_data = f:read(4)
+                if not marker_data or #marker_data < 4 then break end
+                local m_ff, marker = marker_data:byte(1, 2)
+                if m_ff ~= 0xff then break end
+                while marker == 0xff do
+                    local next_b = f:read(1)
+                    if not next_b or #next_b < 1 then break end
+                    marker = next_b:byte(1)
+                end
+                local len = read_u16_be(marker_data, 3)
+                if (marker >= 0xc0 and marker <= 0xc3) or (marker >= 0xc5 and marker <= 0xc7)
+                    or (marker >= 0xc9 and marker <= 0xcb) or (marker >= 0xcd and marker <= 0xcf) then
+                    local sof_data = f:read(5)
+                    if sof_data and #sof_data >= 5 then
+                        f:close()
+                        local jh = read_u16_be(sof_data, 2)
+                        local jw = read_u16_be(sof_data, 4)
+                        return jw, jh, "jpeg"
+                    end
+                    break
+                end
+                offset = offset + 2 + len
+            end
+        end
         f:close()
-        if not head or #head < 24 then
-            return nil
-        end
-        local sig = string.char(137, 80, 78, 71, 13, 10, 26, 10)
-        if head:sub(1, 8) ~= sig or head:sub(13, 16) ~= "IHDR" then
-            return nil
-        end
-        local b = { head:byte(17, 24) }
-        return b[1] * 16777216 + b[2] * 65536 + b[3] * 256 + b[4],
-            b[5] * 16777216 + b[6] * 65536 + b[7] * 256 + b[8]
+        return nil
     end)
-    if ok then
-        return w, h
+    if ok and w and h then
+        return w, h, fmt
     end
     return nil
 end
-M._pngSize = function(_, path) -- 测试直调(方法形式,self 占位)
-    return pngSize(path)
+
+local pngSize = function(path)
+    local w, h, fmt = imageSize(path)
+    if fmt == "png" then return w, h end
+    return nil
 end
 
--- 加载 PNG → BB8 灰度 bb(默认超画布适配缩小保纵横比;给 tw/th 则按显式目标
--- 尺寸渲染);返回 bb 或 nil, err
+M._pngSize = function(_, path)
+    return pngSize(path)
+end
+M._imageSize = function(_, path)
+    return imageSize(path)
+end
 function M:_loadImageBB(path, tw, th)
-    local w, h = pngSize(path)
+    local w, h = imageSize(path)
     if not w then
-        return nil, "not_png"
+        return nil, "unsupported_format"
     end
     if w > const.IMAGE_MAX_DIM or h > const.IMAGE_MAX_DIM then
         return nil, "too_large"
@@ -158,26 +258,26 @@ end
 -- 记住上次导入目录 import_folder 作为起始位置,下次直达)
 function M:_importImage()
     local saved_folder = self.save_folder
-    self:_pickSaveFolder(nil, function(name)
-        self:_onImagePicked(name, saved_folder)
-    end, "%.png$", L.t("Import image: ", "导入图片: "),
+    local pat = const.IMAGE_EXT_PATTERN or "%.png$|%.jpe?g$|%.bmp$|%.gif$|%.webp$"
+    self:_pickSaveFolder(nil, function(stripped_name, full_name)
+        self:_onImagePicked(full_name or stripped_name, saved_folder)
+    end, pat, L.t("Import image: ", "导入图片: "),
         (self.import_folder and self.import_folder ~= "") and self.import_folder or nil)
 end
 
--- 浏览器选中文件回调。契约:commitFile 已把"文件所在目录"写入 save_folder,
--- 名字已按 file_ext 剥后缀(大写 .PNG 剥不掉,这里兼容两种拼法)。
--- 读完目录即恢复快照——导入不改变保存目录(旧版用导入前快照覆盖回写,
--- 把目录信息一起冲掉,路径拼到旧保存目录 → 恒"无法加载图片")
+-- 浏览器选中文件回调:支持常见图片格式(PNG/JPG/BMP/GIF/WEBP)
 function M:_onImagePicked(name, saved_folder)
     local dir = (self.save_folder ~= "") and self.save_folder
         or (DataStorage:getDataDir() .. "/drawingboard")
     self.import_folder = dir -- 记住导入目录(SETTING_KEYS 持久化,下次浏览器直达)
     self.save_folder = saved_folder
-    local fname = name:lower():match("%.png$") and name or (name .. ".png")
+    local fname = name
+    if not fname:lower():match("%.[a-z0-9]+$") then
+        fname = fname .. ".png"
+    end
     self:_importImageFile(dir .. "/" .. fname)
 end
 
--- 导入图片文件到当前图层:加载→转灰→入层+撤销→居中放置→自动切选择工具并选中
 function M:_importImageFile(path)
     local bb, err = self:_loadImageBB(path)
     if not bb then

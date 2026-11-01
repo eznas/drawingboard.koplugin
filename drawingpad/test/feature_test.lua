@@ -39,6 +39,16 @@ local function check(cond, msg)
     end
 end
 
+-- 已提交元素的 points 是打包字串;活跃笔画是扁平表。统一解包成扁平表便于断言
+local function upoints(el)
+    local shapes = require("drawingpad.shapes")
+    local pts = el.points
+    if type(pts) == "string" then
+        pts = shapes.unpackPoints(pts)
+    end
+    return pts
+end
+
 -- ============ 1. 防抖 ============
 do
     local ok, err = pcall(function()
@@ -49,8 +59,9 @@ do
         canvas:onPanRelease(nil, { pos = { x = 100, y = 300 } })
         check(#canvas.elements == 1, "zero-move quick touch should produce a dot, got " .. #canvas.elements)
         local dot = canvas.elements[1]
-        check(dot.kind == "freehand" and #dot.points == 1
-            and dot.points[1].x == 100 and dot.points[1].y == 300,
+        local dpts = upoints(dot)
+        check(dot.kind == "freehand" and #dpts == 2
+            and dpts[1] == 100 and dpts[2] == 300,
             "dot should be 1 point at press point")
 
         -- 1a2. 早触发策略:超过 EARLY_TRIGGER(1px)的微小移动即正式起笔,保住起笔曲线
@@ -96,18 +107,18 @@ do
         canvas2:onPan(nil, { pos = { x = 100, y = 300 }, start_pos = { x = 100, y = 300 } })
         canvas2:onPan(nil, { pos = { x = 104, y = 300 }, start_pos = { x = 100, y = 300 } })
         check(canvas2._stroke ~= nil, "stroke should start at threshold")
-        check(canvas2._stroke.points[1].x == 100 and canvas2._stroke.points[1].y == 300,
+        check(canvas2._stroke.points[1] == 100 and canvas2._stroke.points[2] == 300,
             "first point should be press point")
         canvas2:onPan(nil, { pos = { x = 200, y = 300 }, start_pos = { x = 100, y = 300 } })
         canvas2:onPanRelease(nil, { pos = { x = 220, y = 300 } })
         check(#canvas2.elements == 1, "threshold stroke should commit")
-        check(canvas2.elements[1].points[1].x == 100, "committed stroke first point = press")
+        check(upoints(canvas2.elements[1])[1] == 100, "committed stroke first point = press")
 
         -- 1c. 画笔 onTap:快速轻触产生墨点
         local canvas3 = newCanvas()
         canvas3:_setTool("brush")
         canvas3:onTap(nil, { pos = { x = 150, y = 400 } })
-        check(#canvas3.elements == 1 and canvas3.elements[1].points[1].x == 150,
+        check(#canvas3.elements == 1 and upoints(canvas3.elements[1])[1] == 150,
             "tap should produce a dot")
 
         -- 1d. 形状最小尺寸:过小丢弃,正常尺寸提交
@@ -159,8 +170,9 @@ do
         canvas:onPanRelease(nil, { pos = { x = 402, y = 402 } })
         check(#canvas.elements == 1, "1b-1: early-trigger stroke commits a tick, got " .. #canvas.elements)
         local tick = canvas.elements[1]
+        local tpts = upoints(tick)
         check(tick.kind == "freehand", "1b-1: element kind freehand")
-        check(tick.points[1].x == 400 and tick.points[1].y == 400, "1b-1: first point = press")
+        check(tpts[1] == 400 and tpts[2] == 400, "1b-1: first point = press")
         check(canvas.canvas_bb:getPixel(401, 401).a < 128, "1b-1: tick ink visible")
 
         -- 1b-2. swipe 收尾 + 微轨迹:按下点+微轨迹+终点成弧形笔画(旧版拉直为 2 点直线)
@@ -173,11 +185,14 @@ do
         canvas3:onSwipe(nil, { pos = { x = 500, y = 400 }, end_pos = { x = 520, y = 384 } })
         check(#canvas3.elements == 1, "1b-2: swipe with micro commits stroke, got " .. #canvas3.elements)
         local sw = canvas3.elements[1]
+        local swpts = upoints(sw)
         check(sw.kind == "freehand", "1b-2: element kind freehand")
-        check(#sw.points >= 4, "1b-2: curved path kept (not 2-point straight), got " .. #sw.points)
+        check(#swpts >= 8, "1b-2: curved path kept (not 2-point straight), got " .. #swpts / 2 .. " pts")
         -- 中间点偏离首末弦 = 曲率保留
-        local p0, pm, pn = sw.points[1], sw.points[2], sw.points[#sw.points]
-        local cross = math.abs((pn.x - p0.x) * (pm.y - p0.y) - (pn.y - p0.y) * (pm.x - p0.x))
+        local p0x, p0y = swpts[1], swpts[2]
+        local pmx, pmy = swpts[3], swpts[4]
+        local pnx, pny = swpts[#swpts-1], swpts[#swpts]
+        local cross = math.abs((pnx - p0x) * (pmy - p0y) - (pny - p0y) * (pmx - p0x))
         check(cross > 0, "1b-2: middle point off the start-end chord (curvature kept)")
         canvas3:_undo()
         check(#canvas3.elements == 0, "1b-2: swipe stroke undoable")
@@ -188,19 +203,19 @@ do
         canvas4:_setTool("brush")
         canvas4:onHold(nil, { pos = { x = 460, y = 400 } })
         check(canvas4._stroke ~= nil, "1b-3: hold creates in-progress stroke")
-        check(canvas4._stroke.points[1].x == 460 and canvas4._stroke.points[1].y == 400,
+        check(canvas4._stroke.points[1] == 460 and canvas4._stroke.points[2] == 400,
             "1b-3: hold stroke first point = press")
         check(#canvas4.elements == 0, "1b-3: hold stroke not committed yet")
         canvas4:onHoldPan(nil, { pos = { x = 490, y = 420 }, start_pos = { x = 460, y = 400 } })
         canvas4:onHoldRelease(nil, { pos = { x = 500, y = 424 } })
         check(#canvas4.elements == 1, "1b-3: hold stroke commits once")
-        check(#canvas4.elements[1].points >= 3, "1b-3: committed stroke keeps press + drag points")
+        check(#upoints(canvas4.elements[1]) >= 6, "1b-3: committed stroke keeps press + drag points")
 
         -- 1b-4. 无收锋:polyline 起点全宽(旧版起点仅 ~35% 宽度渐变入笔)
         local bb = Blitbuffer.new(100, 100, Blitbuffer.TYPE_BB8)
         bb:paintRect(0, 0, 100, 100, Blitbuffer.COLOR_WHITE)
         shapes.polyline(bb,
-            { { x = 50, y = 50 }, { x = 60, y = 50 }, { x = 70, y = 52 } },
+            { 50, 50, 60, 50, 70, 52 },
             8, Blitbuffer.gray(1), 0, 0, "circle")
         check(bb:getPixel(48, 50).a < 128, "1b-4: stroke start full width (left edge)")
         check(bb:getPixel(52, 50).a < 128, "1b-4: stroke start full width (right edge)")
@@ -221,8 +236,8 @@ do
         canvas6:onPanRelease(nil, { pos = { x = 215, y = 424 } })
         local el6 = canvas6.elements[1]
         check(el6 ~= nil, "1b-5: stroke committed")
-        check(#el6.points >= 7, "1b-5: width-32 arc keeps dense samples (min_step capped), got "
-            .. #el6.points)
+        check(#el6.points >= 14, "1b-5: width-32 arc keeps dense samples (min_step capped), got "
+            .. #el6.points / 2 .. " pts")
 
         -- 1b-6. Catmull-Rom 圆度:10 个采样点的 r=18 圆,外缘半径波动 ≤3px
         -- (旧中点二次曲线同采样下切角,波动 ~3px+;小圆圈不再画成多边形)
@@ -231,7 +246,8 @@ do
         local cr_pts = {}
         for i = 0, 9 do
             local a = -math.pi / 2 + 2 * math.pi * i / 10
-            cr_pts[i + 1] = { x = 40 + math.cos(a) * 18, y = 40 + math.sin(a) * 18 }
+            cr_pts[2*i + 1] = 40 + math.cos(a) * 18
+            cr_pts[2*i + 2] = 40 + math.sin(a) * 18
         end
         shapes.polyline(bb2, cr_pts, 2, Blitbuffer.gray(1), 0, 0, "circle")
         local rmin6, rmax6 = math.huge, 0
@@ -808,17 +824,17 @@ do
         local canvas = newCanvas()
         canvas:_setTool("brush")
         -- 注入残留笔画(模拟上一手势漏收 pan_release)
-        canvas._stroke = { kind = "freehand", points = { { x = 100, y = 300 }, { x = 200, y = 300 } }, gray = 1.0, width = 4 }
+        canvas._stroke = { kind = "freehand", points = { 100, 300, 200, 300 }, gray = 1.0, width = 4 }
         -- 新一次落笔:start_pos 与笔画首点不同 → 跨手势保护按末点收笔
         canvas:onPan(nil, { pos = { x = 400, y = 300 }, start_pos = { x = 400, y = 300 } })
-        check(#canvas.elements == 1 and #canvas.elements[1].points == 2,
+        check(#canvas.elements == 1 and #upoints(canvas.elements[1]) == 4,
             "stale stroke should be committed without extension")
-        local last = canvas.elements[1].points[#canvas.elements[1].points]
-        check(last.x == 200 and last.y == 300, "stale stroke last point unchanged")
+        local elp = upoints(canvas.elements[1])
+        check(elp[#elp-1] == 200 and elp[#elp] == 300, "stale stroke last point unchanged")
         -- 新笔画从新按下点起笔(不与旧笔相连)
         canvas:onPan(nil, { pos = { x = 450, y = 300 }, start_pos = { x = 400, y = 300 } })
         canvas:onPanRelease(nil, { pos = { x = 460, y = 300 } })
-        check(#canvas.elements == 2 and canvas.elements[2].points[1].x == 400,
+        check(#canvas.elements == 2 and upoints(canvas.elements[2])[1] == 400,
             "new stroke should start at new press")
         -- 双指打断:进行中笔画按末点收笔
         local canvas2 = newCanvas()
@@ -999,20 +1015,23 @@ do
         check(canvas2:_hitHandle(150, 292) == nil, "rotate mode has no top/edge handle")
         canvas2:onPan(nil, { pos = { x = 208, y = 308 }, start_pos = { x = 208, y = 308 } })
         canvas2:onPanRelease(nil, { pos = { x = 142, y = 358 } }) -- 角偏移 (58,8) 旋 90° → (-8,58)
-        local p1, p2 = line.points[1], line.points[2]
-        local xs_ok = math.abs(p1.x - 150) < 3 and math.abs(p2.x - 150) < 3
-        local ys = { p1.y, p2.y }
+        local lp = upoints(line)
+        local p1x, p1y = lp[1], lp[2]
+        local p2x, p2y = lp[3], lp[4]
+        local xs_ok = math.abs(p1x - 150) < 3 and math.abs(p2x - 150) < 3
+        local ys = { p1y, p2y }
         local ys_ok = (math.abs(ys[1] - 250) < 3 or math.abs(ys[1] - 350) < 3)
             and (math.abs(ys[2] - 250) < 3 or math.abs(ys[2] - 350) < 3)
             and math.abs(ys[1] - ys[2]) > 90
         check(xs_ok and ys_ok,
-            "line rotated 90: " .. p1.x .. "," .. p1.y .. " " .. p2.x .. "," .. p2.y)
+            "line rotated 90: " .. p1x .. "," .. p1y .. " " .. p2x .. "," .. p2y)
         canvas2:_undo()
-        local r1, r2 = line.points[1], line.points[2]
-        check(math.abs(r1.y - 300) < 3 and math.abs(r2.y - 300) < 3,
+        local lu = upoints(line)
+        check(math.abs(lu[2] - 300) < 3 and math.abs(lu[4] - 300) < 3,
             "undo rotation restores horizontal")
         canvas2:_redo()
-        check(math.abs(line.points[1].x - 150) < 3, "redo rotation reapplies")
+        local lr = upoints(line)
+        check(math.abs(lr[1] - 150) < 3, "redo rotation reapplies")
 
         -- 矩形旋转 → poly(4 点描边,实心退化为描边)
         local canvas3 = newCanvas()
@@ -1163,13 +1182,16 @@ do
         canvasR2:onTap(nil, { pos = { x = 200, y = 300 } }) -- 旋转后角点 (100,300)→(200,300),再点选切回缩放
         check(canvasR2._handle_mode == "scale", "poly toggles back to scale")
         local function pdiag(p)
-            local p1, p3 = p.points[1], p.points[3]
-            return math.sqrt((p1.x - p3.x) ^ 2 + (p1.y - p3.y) ^ 2)
+            local pp = upoints(p)
+            local p1x, p1y = pp[1], pp[2]
+            local p3x, p3y = pp[5], pp[6]
+            return math.sqrt((p1x - p3x) ^ 2 + (p1y - p3y) ^ 2)
         end
         local diag0 = pdiag(poly2)
         local fc2 = canvasR2:_frameCorners(poly2)
         local s2x, s2y = fc2[3].x, fc2[3].y -- se 角
-        local ccx, ccy = (poly2.points[1].x + poly2.points[3].x) / 2, (poly2.points[1].y + poly2.points[3].y) / 2
+        local pp = upoints(poly2)
+        local ccx, ccy = (pp[1] + pp[5]) / 2, (pp[2] + pp[6]) / 2
         canvasR2:onPan(nil, { pos = { x = s2x, y = s2y }, start_pos = { x = s2x, y = s2y } })
         canvasR2:onPanRelease(nil, { pos = { x = ccx + (s2x - ccx) * 1.5, y = ccy + (s2y - ccy) * 1.5 } })
         check(pdiag(poly2) > diag0 * 1.15,
@@ -2057,32 +2079,31 @@ do
         -- _smoothClosedPath 单元:方形闭合 → 点数更多、首=末=起点、质心近中心
         local cS = newCanvas()
         local sq = {
-            { x = 100, y = 100 }, { x = 200, y = 100 },
-            { x = 200, y = 200 }, { x = 100, y = 200 },
-            { x = 100, y = 100 }, -- 闭合
+            100, 100, 200, 100,
+            200, 200, 100, 200,
+            100, 100, -- 闭合
         }
         local sm = cS:_smoothClosedPath(sq)
         check(#sm > #sq, "smooth should add points, got " .. tostring(#sm))
-        -- Chaikin 2 轮:方形 4 唯一点 → 每轮每段 2 点 → 16 + 闭合 1 = 17
-        check(#sm == 4 * 2 * 2 + 1, "chaikin 2 rounds per corner, got " .. tostring(#sm))
+        -- Chaikin 2 轮:方形 4 唯一点 → 每轮每段 2 点 → 16 + 闭合 1 = 17 点(扁平 = 34 数)
+        check(#sm == (4 * 2 * 2 + 1) * 2, "chaikin 2 rounds per corner, got " .. tostring(#sm))
         -- 闭合:末点回到首点(Chaikin 切角不保留原顶点,首点=首段 3/4 点)
-        local sf = sm[1]
-        local sl = sm[#sm]
-        check(sl.x == sf.x and sl.y == sf.y, "smooth closes (first==last)")
+        local sf, sfy = sm[1], sm[2]
+        local sl, sly = sm[#sm-1], sm[#sm]
+        check(sl == sf and sly == sfy, "smooth closes (first==last)")
         -- 未闭合序列(末≠首):平滑后自动闭合(末点回到首点)
         local open = {
-            { x = 100, y = 100 }, { x = 200, y = 100 },
-            { x = 200, y = 200 }, { x = 100, y = 200 },
+            100, 100, 200, 100,
+            200, 200, 100, 200,
         } -- 方形三边+一角,未闭合
         local smo = cS:_smoothClosedPath(open)
-        local sl2 = smo[#smo]
-        check(sl2.x == smo[1].x and sl2.y == smo[1].y, "unclosed path auto-closes back to start")
-        check(#smo == 4 * 2 * 2 + 1, "unclosed path smoothed+closed, got " .. tostring(#smo))
+        check(smo[#smo-1] == smo[1] and smo[#smo] == smo[2], "unclosed path auto-closes back to start")
+        check(#smo == (4 * 2 * 2 + 1) * 2, "unclosed path smoothed+closed, got " .. tostring(#smo))
         local mx, my = 0, 0
-        for _, p in ipairs(sm) do
-            mx, my = mx + p.x, my + p.y
+        for i = 1, #sm, 2 do
+            mx, my = mx + sm[i], my + sm[i+1]
         end
-        mx, my = mx / #sm, my / #sm
+        mx, my = mx / (#sm / 2), my / (#sm / 2)
         check(math.abs(mx - 150) < 20 and math.abs(my - 150) < 20,
             "smooth centroid near square center, got " .. mx .. "," .. my)
         -- 描边填整体回归:闭合路径(手抖锯齿) → fill 元素 spans 非空(平滑边界)

@@ -84,7 +84,8 @@ local function drawStroke(points, attrs, flush_every)
     canvas._stroke = s
     local nflush = 0
     for i, p in ipairs(points) do
-        table.insert(s.points, p)
+        s.points[#s.points + 1] = p.x
+        s.points[#s.points + 1] = p.y
         canvas:_renderStrokeTail()
         canvas._stroke_region = canvas:_mergeRegions(canvas._stroke_region,
             canvas:_dirtyRegion(p.x, p.y, p.x, p.y, s.width + 2))

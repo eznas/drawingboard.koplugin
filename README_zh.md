@@ -22,6 +22,10 @@ KOReader 画板插件 —— 在电纸书阅读器上画画、记笔记。
 
 ![灰度作品示例](docs/artwork_hulk.png)
 
+用绘图板绘制的灰度人像:
+
+![灰度人像作品](docs/artwork_girl.png)
+
 ## 安装
 
 - **方式一(推荐)**:到 [Releases](https://github.com/eznas/drawingboard.koplugin/releases) 下载最新 zip,解压后把 `drawingboard.koplugin/` 整个文件夹放入设备的 KOReader 插件目录(Kindle 为 `koreader/plugins/`),重启 KOReader 即可。

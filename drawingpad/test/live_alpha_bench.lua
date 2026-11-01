@@ -47,7 +47,7 @@ local NPHASE = 10
 local per = math.floor(#pts / NPHASE)
 local t0 = os.clock()
 for i, p in ipairs(pts) do
-    table.insert(s.points, p)
+    s.points[#s.points + 1] = p.x; s.points[#s.points + 1] = p.y
     canvas:_renderStrokeTail()
     canvas._stroke_region = canvas:_mergeRegions(canvas._stroke_region,
         canvas:_dirtyRegion(p.x, p.y, p.x, p.y, s.width + 2))

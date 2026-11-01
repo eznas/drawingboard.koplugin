@@ -22,6 +22,10 @@ A grayscale artwork drawn with the drawing board:
 
 ![Grayscale artwork example](docs/artwork_hulk.png)
 
+A grayscale portrait drawn with the drawing board:
+
+![Grayscale portrait artwork](docs/artwork_girl.png)
+
 ## Features
 
 - **Minimal UI, deep toolkit**: fullscreen canvas with a single toolbar; advanced features stay one tap away

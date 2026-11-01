@@ -5,7 +5,7 @@
 画线 = 相邻点插值 + 逐点画笔触形状(见 shapes.tip),不依赖 BlitBuffer 是否有 drawLine。
 
 元素结构(drawElement 分派用):
-- freehand / eraser: { kind, points = {{x,y},...}, width, tip? }
+- freehand / eraser: { kind, points = {x1,y1,x2,y2,...}(扁平数组), width, tip? }
 - line:            { kind, x0, y0, x1, y1, width, tip? }
 - rect:            { kind, x0, y0, x1, y1, width, filled? }
 - circle:          { kind, cx, cy, r, width, filled? }
@@ -16,7 +16,69 @@ tip(笔触形状,仅画笔/直线用):circle/square/triangle/triangle_inv/diamon
 缺省/其他值 = circle,向后兼容。
 --]]
 
+local ffi = require("ffi")
+
 local shapes = {}
+
+-- ===== 点存储:提交后的元素 points 为一个大字串(每坐标 float32,8 字节/点) =====
+-- 活跃笔画(进行中)仍用扁平 double 表 {x1,y1,...};提交时 packPoints 打包。
+-- 字串不可变:克隆/撤销快照可共享引用零成本;变换需 unpack→改→重 pack。
+-- float32(4 字节/坐标):负坐标安全;**保留小数**——int16 每次变换取整 ≤0.5px,
+-- 在拉伸/旋转后的平滑边缘上累积成波浪锯齿(2026-11-01 真机复现),float32
+-- 精度 ~1e-4px/次,累积可忽略;内存 8B/点,仍比扁平 double 表省 3×。
+-- 历史:int16 版 .drawing(version≤2)由 _loadProject 转换(勿改回 int16/uint16)。
+function shapes.packPoints(pts)
+    local n2 = #pts
+    local buf = ffi.new("float[?]", n2)
+    for i = 1, n2 do
+        buf[i-1] = pts[i] -- 保留小数,不取整
+    end
+    return ffi.string(buf, n2 * 4) -- n2 个坐标 = 4*n2 字节
+end
+
+function shapes.unpackPoints(s)
+    local cast = ffi.cast("float*", s)
+    local n2 = #s / 4 -- 字节数/4 = 坐标个数
+    local out = {}
+    for i = 1, n2 do
+        out[i] = cast[i-1]
+    end
+    return out
+end
+
+-- points 访问辅助:返回 (cast, 顶点数)。接受字串(打包)或扁平 double 表(自动打包,
+-- 兼容活跃笔画/测试直传),调用方对返回的 cast 只读。
+function shapes.pointCast(points)
+    if type(points) ~= "string" then
+        points = shapes.packPoints(points)
+    end
+    return ffi.cast("float*", points), #points / 8
+end
+
+-- 打包字串的可变变换:拷入 float 缓冲 → fn(buf, nc) 原地改(nc=坐标个数)→ 重新打包。
+-- 也接受扁平 double 表(自动打包,兼容测试/外部直传)。不要在 fn 里取整——
+-- 保留小数才能避免逐次变换的量化漂移(波浪锯齿)。
+function shapes.mutatePoints(s, fn)
+    if type(s) ~= "string" then
+        s = shapes.packPoints(s)
+    end
+    local nc = #s / 4
+    local buf = ffi.new("float[?]", nc)
+    ffi.copy(buf, s, nc * 4)
+    fn(buf, nc)
+    return ffi.string(buf, nc * 4)
+end
+
+-- 旧版 int16 打包(仅 .drawing version≤2 加载转换用):解包为扁平 double 表
+function shapes.unpackPointsI16(s)
+    local cast = ffi.cast("int16_t*", s)
+    local n2 = #s / 2
+    local out = {}
+    for i = 1, n2 do
+        out[i] = cast[i-1]
+    end
+    return out
+end
 
 -- 画一个 width 见方的点(裁剪到画布内,负坐标/越界安全)
 function shapes.dot(bb, x, y, width, color)
@@ -245,19 +307,19 @@ end
 -- (圆头笔触保证段间无缝)。相比中点二次曲线(近似二次 B 样条,会在每个采样点处切角),
 -- 过点插值在稀疏采样的闭合曲线(小圆圈)上保持圆滑——8~10 个采样点即可画出圆。
 -- 控制点共线时退化为直线,零长度段安全(t=0 起点即 P1)。
-function shapes.crSegment(bb, p0, p1, p2, p3, width, color, tip)
-    local approx = math.abs(p1.x - p2.x) + math.abs(p1.y - p2.y)
+function shapes.crSegment(bb, x0, y0, x1, y1, x2, y2, x3, y3, width, color, tip)
+    local approx = math.abs(x1 - x2) + math.abs(y1 - y2)
     local steps = math.max(2, math.min(64, math.floor(approx / 2)))
-    local px = math.floor(p1.x)
-    local py = math.floor(p1.y)
-    local cx0 = 2 * p1.x
-    local cx1 = -p0.x + p2.x
-    local cx2 = 2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x
-    local cx3 = -p0.x + 3 * p1.x - 3 * p2.x + p3.x
-    local cy0 = 2 * p1.y
-    local cy1 = -p0.y + p2.y
-    local cy2 = 2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y
-    local cy3 = -p0.y + 3 * p1.y - 3 * p2.y + p3.y
+    local px = math.floor(x1)
+    local py = math.floor(y1)
+    local cx0 = 2 * x1
+    local cx1 = -x0 + x2
+    local cx2 = 2 * x0 - 5 * x1 + 4 * x2 - x3
+    local cx3 = -x0 + 3 * x1 - 3 * x2 + x3
+    local cy0 = 2 * y1
+    local cy1 = -y0 + y2
+    local cy2 = 2 * y0 - 5 * y1 + 4 * y2 - y3
+    local cy3 = -y0 + 3 * y1 - 3 * y2 + y3
     for i = 1, steps do
         local t = i / steps
         local t2 = t * t
@@ -276,46 +338,33 @@ end
 -- (端点邻位钳到首/末点),曲线精确通过每个采样点。
 -- 与 strokes.lua 的增量渲染(_renderStrokeTail/_renderStrokeClose)逐段一致:
 -- 实时笔迹与重绘完全相同。
+-- 扁平点数组 {x1,y1,x2,y2,...}(活跃笔画/测试)或打包字串(已提交元素):
+-- 第 i 点 = points[2i-1], points[2i]。
 function shapes.polyline(bb, points, width, color, ox, oy, tip)
     ox = ox or 0
     oy = oy or 0
-    local n = #points
+    local cast, n = shapes.pointCast(points)
     if n == 0 then return end
     if n == 1 then
-        shapes.tip(bb, points[1].x + ox, points[1].y + oy, width, color, tip)
+        shapes.tip(bb, cast[0] + ox, cast[1] + oy, width, color, tip)
         return
     end
     -- 起点笔触(全宽:起笔即全宽,起笔处的小圆弧清晰可见)
-    shapes.tip(bb, points[1].x + ox, points[1].y + oy, width, color, tip)
-    if ox == 0 and oy == 0 then
-        for i = 1, n - 1 do
-            local p0 = points[math.max(1, i - 1)]
-            local p1 = points[i]
-            local p2 = points[i + 1]
-            local p3 = points[math.min(n, i + 2)]
-            shapes.crSegment(bb, p0, p1, p2, p3, width, color, tip)
-        end
-    else
-        local p0o = { x = 0, y = 0 }
-        local p1o = { x = 0, y = 0 }
-        local p2o = { x = 0, y = 0 }
-        local p3o = { x = 0, y = 0 }
-        for i = 1, n - 1 do
-            local p0 = points[math.max(1, i - 1)]
-            local p1 = points[i]
-            local p2 = points[i + 1]
-            local p3 = points[math.min(n, i + 2)]
-            p0o.x, p0o.y = p0.x + ox, p0.y + oy
-            p1o.x, p1o.y = p1.x + ox, p1.y + oy
-            p2o.x, p2o.y = p2.x + ox, p2.y + oy
-            p3o.x, p3o.y = p3.x + ox, p3.y + oy
-            shapes.crSegment(bb, p0o, p1o, p2o, p3o, width, color, tip)
-        end
+    shapes.tip(bb, cast[0] + ox, cast[1] + oy, width, color, tip)
+    for i = 1, n - 1 do
+        local j0 = math.max(1, i - 1)
+        local j3 = math.min(n, i + 2)
+        shapes.crSegment(bb,
+            cast[2*j0-2] + ox, cast[2*j0-1] + oy,
+            cast[2*i-2] + ox, cast[2*i-1] + oy,
+            cast[2*i] + ox, cast[2*i+1] + oy,
+            cast[2*j3-2] + ox, cast[2*j3-1] + oy,
+            width, color, tip)
     end
     -- 微段模式跳过了各段终点盖章(下一微段起点即该处),整笔终点须显式补一次;
     -- circle 笔触的终点圆头由 thickLineFill 端盖覆盖,无需额外盖章
     if tip ~= nil and tip ~= "circle" then
-        shapes.tip(bb, points[n].x + ox, points[n].y + oy, width, color, tip)
+        shapes.tip(bb, cast[2*n-2] + ox, cast[2*n-1] + oy, width, color, tip)
     end
 end
 
@@ -804,11 +853,13 @@ function shapes.drawFilledAlpha(bb, el, color, ox, oy)
         y0, y1 = el.cy - hh + oy, el.cy + hh + oy
     else
         x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
-        for _, p in ipairs(el.points) do
-            if p.x + ox < x0 then x0 = p.x + ox end
-            if p.x + ox > x1 then x1 = p.x + ox end
-            if p.y + oy < y0 then y0 = p.y + oy end
-            if p.y + oy > y1 then y1 = p.y + oy end
+        local cast, pn = shapes.pointCast(el.points)
+        for i = 1, pn do
+            local x, y = cast[2*i-2] + ox, cast[2*i-1] + oy
+            if x < x0 then x0 = x end
+            if x > x1 then x1 = x end
+            if y < y0 then y0 = y end
+            if y > y1 then y1 = y end
         end
     end
     -- 笔尖形状超出采样点的最大半径(单边,按 width 系数):circle/diamond=0.5;
@@ -945,27 +996,30 @@ function shapes.drawElement(bb, el, color, ox, oy)
         shapes.polyline(bb, el.points, el.width, color, ox, oy, el.tip)
     elseif kind == "poly" then
         -- 多边形(旋转后的矩形):实心先扫描线填充(v61k:不再退化为空心)再闭合描边
-        local pts = el.points
-        local n = #pts
+        -- poly.points 为打包字串(4 字节/点);n = 顶点数
+        local cast, n = shapes.pointCast(el.points)
         -- v62i:半透明实心 = 填充按线宽一半内缩,否则描边叠在填充上双重混合(alpha 两次
         -- 应用 ≈ 1-(1-a)²)显出深色轮廓;内缩后 填充与描边带相接不重叠。不透明照旧
         local inset = 0
         if el.filled and type(bb) == "table" and bb.__dp_alpha and bb.__dp_alpha < 255 and n >= 4 then
             inset = math.floor(el.width / 2 + 0.5)
         end
+        local function px(i) return cast[2*i-2] + (ox or 0) end
+        local function py(i) return cast[2*i-1] + (oy or 0) end
         if el.filled and n >= 3 then
             local poly = {}
             if inset > 0 then
                 -- 每个顶点沿两条相邻边方向各内缩 inset(矩形内偏移的逐顶点公式)
-                for i, p in ipairs(pts) do
-                    local prev, nxt = pts[i == 1 and n or i - 1], pts[i == n and 1 or i + 1]
-                    local u1x, u1y = norm2(prev.x - p.x, prev.y - p.y)
-                    local u2x, u2y = norm2(nxt.x - p.x, nxt.y - p.y)
-                    poly[i] = { p.x + (u1x + u2x) * inset + (ox or 0), p.y + (u1y + u2y) * inset + (oy or 0) }
+                for i = 1, n do
+                    local pj, nk = i == 1 and n or i - 1, i == n and 1 or i + 1
+                    local ax, ay = px(i), py(i)
+                    local u1x, u1y = norm2(px(pj) - ax, py(pj) - ay)
+                    local u2x, u2y = norm2(px(nk) - ax, py(nk) - ay)
+                    poly[i] = { ax + (u1x + u2x) * inset, ay + (u1y + u2y) * inset }
                 end
             else
-                for i, p in ipairs(pts) do
-                    poly[i] = { p.x + (ox or 0), p.y + (oy or 0) }
+                for i = 1, n do
+                    poly[i] = { px(i), py(i) }
                 end
             end
             local bw, bh = bb:getWidth(), bb:getHeight()
@@ -983,14 +1037,10 @@ function shapes.drawElement(bb, el, color, ox, oy)
             end
         end
         for i = 2, n do
-            local a, b = pts[i - 1], pts[i]
-            shapes.thickLine(bb, a.x + (ox or 0), a.y + (oy or 0),
-                b.x + (ox or 0), b.y + (oy or 0), el.width, color, el.tip)
+            shapes.thickLine(bb, px(i-1), py(i-1), px(i), py(i), el.width, color, el.tip)
         end
         if n >= 3 then
-            local a, b = pts[n], pts[1]
-            shapes.thickLine(bb, a.x + (ox or 0), a.y + (oy or 0),
-                b.x + (ox or 0), b.y + (oy or 0), el.width, color, el.tip)
+            shapes.thickLine(bb, px(n), py(n), px(1), py(1), el.width, color, el.tip)
         end
     elseif kind == "line" then
         shapes.thickLine(bb, el.x0 + (ox or 0), el.y0 + (oy or 0),

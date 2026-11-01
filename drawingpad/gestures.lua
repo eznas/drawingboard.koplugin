@@ -93,8 +93,8 @@ function M:onPan(_, ges)
         -- 跨手势保护:存在进行中笔画但按下点 ≠ 笔画首点 = 上一手势漏了收笔
         -- (如双指打断未收 pan_release),先按末点收笔,防止新笔起笔连接上一笔末笔
         if self._stroke and ges.start_pos then
-            local first = self._stroke.points[1]
-            if first and (ges.start_pos.x ~= first.x or ges.start_pos.y ~= first.y) then
+            local fx, fy = self._stroke.points[1], self._stroke.points[2]
+            if fx and (ges.start_pos.x ~= fx or ges.start_pos.y ~= fy) then
                 self:_finishStroke(nil)
             end
         end
@@ -122,9 +122,10 @@ function M:onPan(_, ges)
                     or math.abs(y - p.y) >= const.STROKE_EARLY_TRIGGER_DIST then
                     -- 移动超过阈值:起笔 = 按下点 + 微轨迹 + 当前点,一次成形
                     self._stroke_pending = nil
-                    local points = { { x = p.x, y = p.y } }
+                    local points = { p.x, p.y }
                     for _, mp in ipairs(p.micro) do
-                        points[#points + 1] = mp
+                        points[#points + 1] = mp.x
+                        points[#points + 1] = mp.y
                     end
                     self._stroke = {
                         kind = "freehand",
@@ -245,9 +246,10 @@ function M:onPanRelease(_, ges)
         local p = self._stroke_pending
         self._stroke_pending = nil
         if #p.micro >= 2 then
-            local points = { { x = p.x, y = p.y } }
+            local points = { p.x, p.y }
             for _, mp in ipairs(p.micro) do
-                points[#points + 1] = mp
+                points[#points + 1] = mp.x
+                points[#points + 1] = mp.y
             end
             self._stroke = {
                 kind = "freehand",
@@ -432,13 +434,14 @@ function M:onSwipe(_, ges)
             -- 按下点 + 微轨迹 + 终点 构成完整路径落盘,起笔小圆弧的曲率保留
             -- (旧版只画首尾直线把弧拉直)。描边填同样适用:_finishStroke 内部
             -- 闭合填充,退化路径自动清除路径墨迹不留残迹
-            local points = { { x = pending.x, y = pending.y } }
+            local points = { pending.x, pending.y }
             for _, mp in ipairs(pending.micro) do
-                points[#points + 1] = mp
+                points[#points + 1] = mp.x
+                points[#points + 1] = mp.y
             end
-            local last_m = points[#points]
-            if last_m.x ~= x or last_m.y ~= y then
-                points[#points + 1] = { x = x, y = y }
+            if points[#points-1] ~= x or points[#points] ~= y then
+                points[#points + 1] = x
+                points[#points + 1] = y
             end
             self._stroke = {
                 kind = "freehand",
@@ -463,7 +466,7 @@ function M:onSwipe(_, ges)
             -- 纯快速直线
             local stroke = {
                 kind = "freehand",
-                points = { { x = sx, y = sy }, { x = x, y = y } },
+                points = shapes.packPoints({ sx, sy, x, y }),
                 gray = self:_resolveGray(),
                 alpha = self:_resolveAlpha(), blend = self.alpha_blend,
                 width = self:_resolveWidth(),
@@ -569,9 +572,10 @@ function M:onHold(_, ges)
             -- 扩展同一条笔画,收笔整体落盘
             local p = self._stroke_pending or { x = x, y = y, micro = {} }
             self._stroke_pending = nil
-            local points = { { x = p.x, y = p.y } }
+            local points = { p.x, p.y }
             for _, mp in ipairs(p.micro or {}) do
-                points[#points + 1] = mp
+                points[#points + 1] = mp.x
+                points[#points + 1] = mp.y
             end
             self._stroke = {
                 kind = "freehand",

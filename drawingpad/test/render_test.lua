@@ -28,8 +28,8 @@ bb:paintRect(0, 0, W, H, Blitbuffer.COLOR_WHITE)
 local black = Blitbuffer.gray(1.0)
 local gray = Blitbuffer.gray(0.5)
 
--- 画笔折线(粗 8)
-shapes.polyline(bb, { { x = 10, y = 20 }, { x = 60, y = 80 }, { x = 120, y = 40 }, { x = 180, y = 90 } }, 8, black)
+-- 画笔折线(粗 8):扁平点数组 {x1,y1,x2,y2,...}
+shapes.polyline(bb, { 10, 20, 60, 80, 120, 40, 180, 90 }, 8, black)
 -- 直线(粗 4)
 shapes.thickLine(bb, 10, 110, 300, 110, 4, gray)
 -- 矩形(粗 6)
@@ -37,7 +37,7 @@ shapes.rect(bb, 20, 130, 140, 220, 6, black)
 -- 圆形(粗 4)
 shapes.circle(bb, 220, 170, 45, 4, gray)
 -- 橡皮(白,粗 12):在折线上擦一段
-shapes.polyline(bb, { { x = 40, y = 45 }, { x = 70, y = 60 }, { x = 100, y = 50 } }, 12, Blitbuffer.COLOR_WHITE)
+shapes.polyline(bb, { 40, 45, 70, 60, 100, 50 }, 12, Blitbuffer.COLOR_WHITE)
 -- 越界安全:完全在画布外的点不应报错
 shapes.thickLine(bb, -50, -50, -10, -10, 4, black)
 
@@ -370,9 +370,10 @@ if ok_canvas then
             error("second stroke not separate: " .. #canvas.elements)
         end
         local s2 = canvas.elements[2]
-        if not (s2.points[1].x == 300 and s2.points[1].y == 400) then
+        local s2p = shapes.unpackPoints(s2.points)
+        if not (s2p[1] == 300 and s2p[2] == 400) then
             error("second stroke connected to first: start="
-                .. tostring(s2.points[1].x) .. "," .. tostring(s2.points[1].y))
+                .. tostring(s2p[1]) .. "," .. tostring(s2p[2]))
         end
         print("hold_release finish + quick next stroke OK")
     end)
@@ -482,7 +483,7 @@ if ok_canvas then
         if #canvas.elements ~= 0 then
             error("hold should not commit element immediately: " .. #canvas.elements)
         end
-        if #canvas._stroke.points ~= 1 or canvas._stroke.points[1].x ~= 150 or canvas._stroke.points[1].y ~= 350 then
+        if #canvas._stroke.points ~= 2 or canvas._stroke.points[1] ~= 150 or canvas._stroke.points[2] ~= 350 then
             error("hold stroke start point wrong")
         end
         -- 2. hold_release 收笔,整体落盘为单点
@@ -491,8 +492,9 @@ if ok_canvas then
             error("hold_release did not commit: " .. #canvas.elements)
         end
         local dot = canvas.elements[1]
-        if dot.kind ~= "freehand" or #dot.points ~= 1
-            or dot.points[1].x ~= 150 or dot.points[1].y ~= 350 then
+        local dotp = shapes.unpackPoints(dot.points)
+        if dot.kind ~= "freehand" or #dotp ~= 2
+            or dotp[1] ~= 150 or dotp[2] ~= 350 then
             error("dot element wrong")
         end
         -- 3. 撤销
@@ -509,10 +511,11 @@ if ok_canvas then
             error("hold+pan+release did not commit: " .. #canvas.elements)
         end
         local stroke = canvas.elements[1]
-        if stroke.kind ~= "freehand" or #stroke.points < 2 then
-            error("stroke should have multiple points: " .. #stroke.points)
+        local strokep = shapes.unpackPoints(stroke.points)
+        if stroke.kind ~= "freehand" or #strokep < 4 then
+            error("stroke should have multiple points: " .. #strokep / 2)
         end
-        if stroke.points[1].x ~= 100 or stroke.points[1].y ~= 300 then
+        if strokep[1] ~= 100 or strokep[2] ~= 300 then
             error("stroke start point should be hold point")
         end
         print("hold + pan + release line OK")

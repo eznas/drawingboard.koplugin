@@ -99,8 +99,11 @@ function M:_elementBBox(el)
         add(math.min(el.x0, el.x1) - pen_r, math.min(el.y0, el.y1) - pen_r,
             math.max(el.x0, el.x1) + pen_r, math.max(el.y0, el.y1) + pen_r)
     elseif el.kind == "freehand" or el.kind == "eraser" or el.kind == "poly" then
-        for _, p in ipairs(el.points) do
-            add(p.x - pen_r, p.y - pen_r, p.x + pen_r, p.y + pen_r)
+        -- points 为打包字串(4 字节/点);poly 也同格式
+        local cast, pn = shapes.pointCast(el.points)
+        for i = 1, pn do
+            add(cast[2*i-2] - pen_r, cast[2*i-1] - pen_r,
+                cast[2*i-2] + pen_r, cast[2*i-1] + pen_r)
         end
     elseif el.kind == "fill" then
         -- 洪泛填充结果:span 列表 {y, x0, x1} 的包围盒
@@ -227,10 +230,13 @@ end
 -- 平移元素坐标(各 kind 坐标字段;平移后需重算 bbox 缓存)
 function M:_moveElement(el, dx, dy)
     if el.kind == "freehand" or el.kind == "eraser" or el.kind == "poly" then
-        for _, p in ipairs(el.points) do
-            p.x = p.x + dx
-            p.y = p.y + dy
-        end
+        -- 字串不可变:拷入 int16 缓冲平移后重新打包(负坐标安全,勿用 uint16)(取整误差 ≤0.5px,有界)
+        el.points = shapes.mutatePoints(el.points, function(buf, nc)
+            for k = 1, nc, 2 do
+                buf[k-1] = buf[k-1] + dx
+                buf[k] = buf[k] + dy
+            end
+        end)
     elseif el.kind == "line" or el.kind == "rect" then
         el.x0, el.y0 = el.x0 + dx, el.y0 + dy
         el.x1, el.y1 = el.x1 + dx, el.y1 + dy
@@ -246,10 +252,13 @@ function M:_moveElement(el, dx, dy)
         -- 填充结果:平移 span 列表(每行 y/x0/x1);源顶点同步平移,
         -- 否则移动后再旋转会按旧顶点重算、填充跳回原位
         if el.src_points then
-            for _, p in ipairs(el.src_points) do
-                p.x = p.x + dx
-                p.y = p.y + dy
-            end
+            -- 字串不可变:拷入 int16 缓冲平移后重新打包(负坐标安全)
+            el.src_points = shapes.mutatePoints(el.src_points, function(buf, nc)
+                for k = 1, nc, 2 do
+                    buf[k-1] = buf[k-1] + dx
+                    buf[k] = buf[k] + dy
+                end
+            end)
         end
         for _, sp in ipairs(el.spans) do
             sp[1] = sp[1] + dy
@@ -259,16 +268,20 @@ function M:_moveElement(el, dx, dy)
     end
 end
 
--- 复制元素(freehand 点表/spans 深拷贝;_bbox 不复制,提交时重算)
+-- 复制元素(points/src_points 打包字串共享引用(不可变)/spans 深拷贝;_bbox 不复制,提交时重算)
 function M:_cloneElement(el)
     local c = {}
     for k, v in pairs(el) do
         if k == "points" or k == "src_points" then
-            local pts = {}
-            for i, p in ipairs(v) do
-                pts[i] = { x = p.x, y = p.y }
+            if type(v) == "string" then
+                c[k] = v -- 打包字串不可变,共享引用安全且零成本
+            else
+                local pts = {}
+                for i = 1, #v do
+                    pts[i] = v[i]
+                end
+                c[k] = pts
             end
-            c[k] = pts
         elseif k == "spans" then
             -- fill 的 span 列表深拷贝(移动/复制副本独立,不共享像素行)
             local sps = {}
@@ -292,11 +305,15 @@ function M:_restoreGeom(el, snap)
     end
     for k, v in pairs(snap) do
         if k == "points" or k == "src_points" then
-            local pts = {}
-            for i, p in ipairs(v) do
-                pts[i] = { x = p.x, y = p.y }
+            if type(v) == "string" then
+                el[k] = v -- 打包字串不可变,快照恢复共享引用即可
+            else
+                local pts = {}
+                for i = 1, #v do
+                    pts[i] = v[i]
+                end
+                el[k] = pts
             end
-            el[k] = pts
         elseif k ~= "_bbox" then
             el[k] = v
         end
@@ -337,9 +354,13 @@ function M:_scaleElement(el, sb, nb)
         return nb.x0 + (px - sb.x0) * sx, nb.y0 + (py - sb.y0) * sy
     end
     if el.kind == "freehand" or el.kind == "poly" then
-        for _, p in ipairs(el.points) do
-            p.x, p.y = map(p.x, p.y)
-        end
+        el.points = shapes.mutatePoints(el.points, function(buf, nc)
+            for k = 1, nc, 2 do
+                local nx, ny = map(buf[k-1], buf[k])
+                buf[k-1] = nx
+                buf[k] = ny
+            end
+        end)
     elseif el.kind == "line" then
         el.x0, el.y0 = map(el.x0, el.y0)
         el.x1, el.y1 = map(el.x1, el.y1)
@@ -392,9 +413,14 @@ function M:_scaleElement(el, sb, nb)
         -- 与首次生成同一条扫描线代码;每次变换都从连续几何出发,无累积量化。
         -- (无 src_points 的 tap 洪水填充/旧存档无几何可依,维持 span 映射)
         if el.src_points then
-            for _, p in ipairs(el.src_points) do
-                p.x, p.y = map(p.x, p.y)
-            end
+            -- 字串拷入 int16 缓冲 → 双线性映射(取整 ≤0.5px/次)→ 重打包 → 重算 spans
+            el.src_points = shapes.mutatePoints(el.src_points, function(buf, nc)
+                for k = 1, nc, 2 do
+                    local nx, ny = map(buf[k-1], buf[k])
+                    buf[k-1] = nx
+                    buf[k] = ny
+                end
+            end)
             el.spans = self:_polygonFillSpans(el.src_points)
             return
         end
@@ -474,9 +500,10 @@ function M:_scaleElementOriented(el, handle, x, y)
             { el.cx - rx * c - ry * s, el.cy - rx * s + ry * c },
         }
     elseif el.kind == "poly" then
+        local cast, pn = shapes.pointCast(el.points)
         F = {}
-        for i, p in ipairs(el.points) do
-            F[i] = { p.x, p.y }
+        for i = 1, pn do
+            F[i] = { cast[2*i-2], cast[2*i-1] }
         end
         if #F < 4 then
             return false
@@ -538,12 +565,15 @@ function M:_scaleElementOriented(el, handle, x, y)
         el.cy = pj[2] + ((x - pj[1]) * ux + (y - pj[2]) * uy) / 2 * uy
             + ((x - pj[1]) * vx + (y - pj[2]) * vy) / 2 * vy
     elseif el.kind == "poly" then
-        for _, p in ipairs(el.points) do
-            local a = (p.x - pj[1]) * ux + (p.y - pj[2]) * uy
-            local b = (p.x - pj[1]) * vx + (p.y - pj[2]) * vy
-            p.x = pj[1] + a * fu * ux + b * fv * vx
-            p.y = pj[2] + a * fu * uy + b * fv * vy
-        end
+        el.points = shapes.mutatePoints(el.points, function(buf, nc)
+            for k = 1, nc, 2 do
+                local px, py = buf[k-1], buf[k]
+                local a = (px - pj[1]) * ux + (py - pj[2]) * uy
+                local b = (px - pj[1]) * vx + (py - pj[2]) * vy
+                buf[k-1] = pj[1] + a * fu * ux + b * fv * vx
+                buf[k] = pj[2] + a * fu * uy + b * fv * vy
+            end
+        end)
     elseif el.kind == "text" then
         -- 均匀部分进字号(字形清晰),残余非均匀进 sx/sy(与 _scaleElement 同套路)
         local f = (fu + fv) / 2
@@ -571,9 +601,13 @@ function M:_rotateElement(el, angle, cx, cy)
         return cx + dx * cos - dy * sin, cy + dx * sin + dy * cos
     end
     if el.kind == "freehand" or el.kind == "poly" then
-        for _, p in ipairs(el.points) do
-            p.x, p.y = rot(p.x, p.y)
-        end
+        el.points = shapes.mutatePoints(el.points, function(buf, nc)
+            for k = 1, nc, 2 do
+                local nx, ny = rot(buf[k-1], buf[k])
+                buf[k-1] = nx
+                buf[k] = ny
+            end
+        end)
     elseif el.kind == "line" then
         el.x0, el.y0 = rot(el.x0, el.y0)
         el.x1, el.y1 = rot(el.x1, el.y1)
@@ -586,16 +620,16 @@ function M:_rotateElement(el, angle, cx, cy)
         el.x, el.y = rot(el.x or 0, el.y or 0)
     elseif el.kind == "rect" then
         local pts = {
-            { x = el.x0, y = el.y0 },
-            { x = el.x1, y = el.y0 },
-            { x = el.x1, y = el.y1 },
-            { x = el.x0, y = el.y1 },
+            el.x0, el.y0,
+            el.x1, el.y0,
+            el.x1, el.y1,
+            el.x0, el.y1,
         }
-        for _, p in ipairs(pts) do
-            p.x, p.y = rot(p.x, p.y)
+        for i = 1, #pts, 2 do
+            pts[i], pts[i+1] = rot(pts[i], pts[i+1])
         end
         el.kind = "poly"
-        el.points = pts
+        el.points = shapes.packPoints(pts)
         -- 保留 filled：旋转后的实心矩形仍应保持实心
     elseif el.kind == "fill" then
         -- 有源顶点的路径填充:顶点精确旋转后用首次生成同一条扫描线
@@ -603,9 +637,14 @@ function M:_rotateElement(el, angle, cx, cy)
         -- 每次变换都从连续几何出发,不像 span 反建路径那样逐次向外漂移
         -- (棘轮:±0.5 外扩+顶点行覆盖 → 旋转多次后穿模细线)。
         if el.src_points then
-            for _, p in ipairs(el.src_points) do
-                p.x, p.y = rot(p.x, p.y)
-            end
+            -- 字串拷入 int16 缓冲 → 旋转(取整 ≤0.5px/次)→ 重打包 → 重算 spans
+            el.src_points = shapes.mutatePoints(el.src_points, function(buf, nc)
+                for k = 1, nc, 2 do
+                    local nx, ny = rot(buf[k-1], buf[k])
+                    buf[k-1] = nx
+                    buf[k] = ny
+                end
+            end)
             el.spans = self:_polygonFillSpans(el.src_points)
             return
         end
